@@ -127,7 +127,15 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
    * be deleted on JVM exit when using the external shuffle service.
    */
   private def createLocalDirs(conf: SparkConf): Array[File] = {
-    Utils.getConfiguredLocalDirs(conf).flatMap { rootDir =>
+    val grasslandLocalDirs = conf.getenv("SPARK_GRASSLAND_LOCAL_DIRS")
+    val dirs = if (grasslandLocalDirs != null && !grasslandLocalDirs.trim.isEmpty) {
+      val dirs = grasslandLocalDirs.split(",")
+      dirs.foreach(dir => ShutdownHookManager.registerShutdownDeleteDir(new File(dir)))
+      dirs
+    } else {
+      Utils.getConfiguredLocalDirs(conf)
+    }
+    dirs.flatMap { rootDir =>
       try {
         val localDir = Utils.createDirectory(rootDir, "blockmgr")
         logInfo(s"Created local directory at $localDir")

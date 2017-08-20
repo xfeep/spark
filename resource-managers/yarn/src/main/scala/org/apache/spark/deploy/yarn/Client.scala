@@ -731,6 +731,7 @@ private[spark] class Client(
    * Set up the environment for launching our ApplicationMaster container.
    */
   private def setupLaunchEnv(
+      appId: String,
       stagingDirPath: Path,
       pySparkArchives: Seq[String]): HashMap[String, String] = {
     logInfo("Setting up the launch environment for our AM container")
@@ -739,6 +740,13 @@ private[spark] class Client(
     env("SPARK_YARN_MODE") = "true"
     env("SPARK_YARN_STAGING_DIR") = stagingDirPath.toString
     env("SPARK_USER") = UserGroupInformation.getCurrentUser().getShortUserName()
+    val grasslandLocalDirs = System.getenv("GRASSLAND_LOCAL_DIRS")
+    if (grasslandLocalDirs != null && !grasslandLocalDirs.trim.isEmpty) {
+      env("SPARK_GRASSLAND_LOCAL_DIRS") = grasslandLocalDirs.split(",")
+        .map(_ + "/usercache/" + env("SPARK_USER") + "/appcache/" + appId)
+        .mkString(",")
+    }
+
     if (loginFromKeytab) {
       val credentialsFile = "credentials-" + UUID.randomUUID().toString
       sparkConf.set(CREDENTIALS_FILE_PATH, new Path(stagingDirPath, credentialsFile).toString)
@@ -810,7 +818,7 @@ private[spark] class Client(
       } else {
         Nil
       }
-    val launchEnv = setupLaunchEnv(appStagingDirPath, pySparkArchives)
+    val launchEnv = setupLaunchEnv(appId.toString, appStagingDirPath, pySparkArchives)
     val localResources = prepareLocalResources(appStagingDirPath, pySparkArchives)
 
     val amContainer = Records.newRecord(classOf[ContainerLaunchContext])
