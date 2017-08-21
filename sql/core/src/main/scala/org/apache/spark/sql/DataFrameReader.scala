@@ -21,19 +21,24 @@ import java.util.{Locale, Properties}
 
 import scala.collection.JavaConverters._
 
-import org.apache.spark.api.java.JavaRDD
 import org.apache.spark.internal.Logging
 import org.apache.spark.Partition
 import org.apache.spark.annotation.InterfaceStability
+import org.apache.spark.api.java.JavaRDD
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.catalyst.json.{CreateJacksonParser, JacksonParser, JSONOptions}
+import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.catalyst.catalog.{CatalogStatistics, CatalogStorageFormat, CatalogTable, CatalogTableType}
+import org.apache.spark.sql.catalyst.json._
+import org.apache.spark.sql.catalyst.plans.logical.ColumnStat
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.LogicalRDD
 import org.apache.spark.sql.execution.command.DDLUtils
 import org.apache.spark.sql.execution.datasources.{DataSource, FailureSafeParser}
 import org.apache.spark.sql.execution.datasources.csv._
 import org.apache.spark.sql.execution.datasources.jdbc._
 import org.apache.spark.sql.execution.datasources.json.TextInputJsonDataSource
-import org.apache.spark.sql.types.{StringType, StructType}
+import org.apache.spark.sql.sources.BaseRelation
+import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
 /**
@@ -44,6 +49,11 @@ import org.apache.spark.unsafe.types.UTF8String
  */
 @InterfaceStability.Stable
 class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
+  val DATAPPS_PREFIX = "datapps."
+  val STATISTICS_PREFIX = DATAPPS_PREFIX + "statistics."
+  val STATISTICS_TOTAL_SIZE = STATISTICS_PREFIX + "totalSize"
+  val STATISTICS_NUM_ROWS = STATISTICS_PREFIX + "numRows"
+  val STATISTICS_COL_STATS_PREFIX = STATISTICS_PREFIX + "colStats."
 
   /**
    * Specifies the input data source format.
@@ -169,13 +179,87 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
         "read files of Hive data source directly.")
     }
 
-    sparkSession.baseRelationToDataFrame(
-      DataSource.apply(
+    extraOptions.get("datapps.cbo") match {
+      case Some(string) if "true" == string.toLowerCase().trim =>
+        val baseRelation = DataSource.apply(
         sparkSession,
         paths = paths,
         userSpecifiedSchema = userSpecifiedSchema,
         className = source,
-        options = extraOptions.toMap).resolveRelation())
+        options = extraOptions.toMap).resolveRelation()
+        sparkSession.baseRelationToDataFrame(baseRelation, constructFakeCatalogTable(baseRelation))
+      case _ => sparkSession.baseRelationToDataFrame(
+        DataSource.apply(
+          sparkSession,
+          paths = paths,
+          userSpecifiedSchema = userSpecifiedSchema,
+          className = source,
+          options = extraOptions.toMap).resolveRelation())
+    }
+  }
+
+  private def constructFakeCatalogTable(baseRelation: BaseRelation): CatalogTable = {
+    val schema = baseRelation.schema
+    val stats = restoreStatisticsFromOptions(schema)
+    CatalogTable (
+      identifier = TableIdentifier("baseRelation_" + System.currentTimeMillis()),
+      tableType = CatalogTableType.EXTERNAL,
+      storage = CatalogStorageFormat(None, None, None, None, false, Map[String, String]()),
+      schema = schema,
+      stats = Some(stats)
+    )
+  }
+
+  private def restoreStatisticsFromOptions(schema: StructType): CatalogStatistics = {
+    val columnStats = new scala.collection.mutable.HashMap[String, ColumnStat]() {
+      override def default(key: String): ColumnStat = ColumnStat(0, None, None, 0, 0, 0)
+    }
+    var catalogStatistics = CatalogStatistics(0)
+    extraOptions.foreach(entry => {
+      val key = entry._1
+      val value = entry._2
+      if (key.startsWith(STATISTICS_COL_STATS_PREFIX)) {
+        val temp = key.substring(STATISTICS_COL_STATS_PREFIX.length).split("\\.")
+        val fieldName = temp(0)
+        val parameter = temp(1)
+        val stat = columnStats(fieldName)
+        val fieldType = schema(fieldName).dataType
+        val newStat = parameter match {
+          case "avgLen" => stat.copy(avgLen = value.toLong)
+          case "distinctCount" => stat.copy(distinctCount = BigInt(value))
+          case "maxLen" => stat.copy(maxLen = value.toLong)
+          case "nullCount" => stat.copy(nullCount = BigInt(value))
+          case "min" => stat.copy(min = Some(fromExternalString(value, fieldName, fieldType)))
+          case "max" => stat.copy(max = Some(fromExternalString(value, fieldName, fieldType)))
+        }
+        columnStats.update(fieldName, newStat)
+      } else if (key == STATISTICS_NUM_ROWS) {
+        catalogStatistics = catalogStatistics.copy(rowCount = Some(BigInt(value)))
+      } else if (key == STATISTICS_TOTAL_SIZE) {
+        catalogStatistics = catalogStatistics.copy(sizeInBytes = BigInt(value))
+      }
+    })
+    catalogStatistics.copy(colStats = columnStats.toMap)
+  }
+
+  private def fromExternalString(s: String, name: String, dataType: DataType): Any = {
+    dataType match {
+      case BooleanType => s.toBoolean
+      case DateType => DateTimeUtils.fromJavaDate(java.sql.Date.valueOf(s))
+      case TimestampType => DateTimeUtils.fromJavaTimestamp(java.sql.Timestamp.valueOf(s))
+      case ByteType => s.toByte
+      case ShortType => s.toShort
+      case IntegerType => s.toInt
+      case LongType => s.toLong
+      case FloatType => s.toFloat
+      case DoubleType => s.toDouble
+      case _: DecimalType => Decimal(s)
+      // This version of Spark does not use min/max for binary/string types so we ignore it.
+      case BinaryType | StringType => null
+      case _ =>
+        throw new AnalysisException("Column statistics deserialization is not supported for " +
+          s"column $name of data type: $dataType.")
+    }
   }
 
   /**

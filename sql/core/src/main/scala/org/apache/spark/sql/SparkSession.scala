@@ -32,6 +32,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{SparkListener, SparkListenerApplicationEnd}
 import org.apache.spark.sql.catalog.Catalog
 import org.apache.spark.sql.catalyst._
+import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.catalyst.encoders._
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Range}
@@ -413,6 +414,10 @@ class SparkSession private(
    */
   def baseRelationToDataFrame(baseRelation: BaseRelation): DataFrame = {
     Dataset.ofRows(self, LogicalRelation(baseRelation))
+  }
+
+  def baseRelationToDataFrame(baseRelation: BaseRelation, table: CatalogTable): DataFrame = {
+    Dataset.ofRows(self, LogicalRelation(baseRelation, table))
   }
 
   /* ------------------------------- *
