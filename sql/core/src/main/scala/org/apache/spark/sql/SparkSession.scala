@@ -32,10 +32,11 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{SparkListener, SparkListenerApplicationEnd}
 import org.apache.spark.sql.catalog.Catalog
 import org.apache.spark.sql.catalyst._
+import org.apache.spark.sql.catalyst.analysis.GrasslandDatasetRelation
 import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.catalyst.encoders._
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
-import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Range}
+import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, LogicalPlan, Range}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.execution.ui.SQLListener
@@ -626,6 +627,31 @@ class SparkSession private(
    */
   def sql(sqlText: String): DataFrame = {
     Dataset.ofRows(self, sessionState.sqlParser.parsePlan(sqlText))
+  }
+
+  def resolveGrasslandDataset(sqlText: String): Set[String] = {
+    val logicalPlan = sessionState.sqlParser.parsePlan(sqlText)
+    this.sessionState.conf.setConfString("datapps.resolve.dataset", "true")
+    try {
+      val resolvedPlan = this.sessionState.analyzer.execute(logicalPlan)
+      val grasslandDatasetRelations =
+        new scala.collection.mutable.HashSet[GrasslandDatasetRelation]()
+      fetchAllGrasslandDatasetRelation(resolvedPlan, grasslandDatasetRelations)
+      grasslandDatasetRelations.map(_.tableIdentifier.table).toSet
+    } finally {
+      this.sessionState.conf.setConfString("datapps.resolve.dataset", "false")
+    }
+  }
+
+  private def fetchAllGrasslandDatasetRelation(resolvedPlan: LogicalPlan,
+         relations: scala.collection.mutable.HashSet[GrasslandDatasetRelation]): Unit = {
+    if (resolvedPlan.isInstanceOf[GrasslandDatasetRelation]) {
+      relations.add(resolvedPlan.asInstanceOf[GrasslandDatasetRelation])
+    } else {
+      if (resolvedPlan.children.nonEmpty) {
+        resolvedPlan.children.foreach(rp => fetchAllGrasslandDatasetRelation(rp, relations))
+      }
+    }
   }
 
   /**
