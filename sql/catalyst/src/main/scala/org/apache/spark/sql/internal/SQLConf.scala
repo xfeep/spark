@@ -781,6 +781,13 @@ object SQLConf {
       .intConf
       .createWithDefault(4096)
 
+  val RESOLVE_GRASSLAND_DATASET =
+    buildConf("datapps.resolve.dataset")
+      .internal()
+      .doc("Resolve grassland dataset")
+      .booleanConf
+      .createWithDefault(false)
+
   val SORT_MERGE_JOIN_EXEC_BUFFER_SPILL_THRESHOLD =
     buildConf("spark.sql.sortMergeJoinExec.buffer.spill.threshold")
       .internal()
@@ -1038,6 +1045,8 @@ class SQLConf extends Serializable with Logging {
   def joinReorderDPStarFilter: Boolean = getConf(SQLConf.JOIN_REORDER_DP_STAR_FILTER)
 
   def windowExecBufferSpillThreshold: Int = getConf(WINDOW_EXEC_BUFFER_SPILL_THRESHOLD)
+
+  def resolveGrasslandDataset: Boolean = getConf(RESOLVE_GRASSLAND_DATASET)
 
   def sortMergeJoinExecBufferSpillThreshold: Int =
     getConf(SORT_MERGE_JOIN_EXEC_BUFFER_SPILL_THRESHOLD)

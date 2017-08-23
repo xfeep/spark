@@ -46,6 +46,12 @@ case class UnresolvedRelation(tableIdentifier: TableIdentifier) extends LeafNode
   override lazy val resolved = false
 }
 
+case class GrasslandDatasetRelation(tableIdentifier: TableIdentifier) extends LeafNode {
+  override def output: Seq[Attribute] = Nil
+  override def analyzed: Boolean = true
+  override lazy val resolved = true
+}
+
 /**
  * An inline table that has not been resolved yet. Once resolved, it is turned by the analyzer into
  * a [[org.apache.spark.sql.catalyst.plans.logical.LocalRelation]].
