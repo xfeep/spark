@@ -909,6 +909,7 @@ object SparkSession {
       // Get the session from current thread's active session.
       var session = activeThreadSession.get()
       if ((session ne null) && !session.sparkContext.isStopped) {
+        DatappsConfigurationEnhancer.enhance(session.sessionState.conf)
         options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
         if (options.nonEmpty) {
           logWarning("Using an existing SparkSession; some configuration may not take effect.")
@@ -921,6 +922,7 @@ object SparkSession {
         // If the current thread does not have an active session, get it from the global session.
         session = defaultSession.get()
         if ((session ne null) && !session.sparkContext.isStopped) {
+          DatappsConfigurationEnhancer.enhance(session.sessionState.conf)
           options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
           if (options.nonEmpty) {
             logWarning("Using an existing SparkSession; some configuration may not take effect.")
@@ -966,6 +968,7 @@ object SparkSession {
         }
 
         session = new SparkSession(sparkContext, None, None, extensions)
+        DatappsConfigurationEnhancer.enhance(session.sessionState.conf)
         options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
         defaultSession.set(session)
 
@@ -1098,4 +1101,16 @@ object SparkSession {
     }
   }
 
+
+
+  object DatappsConfigurationEnhancer {
+    import org.apache.spark.sql.internal.SQLConf._
+    def enhance(conf: SQLConf): Unit = {
+      if (System.getenv("SPARK_DATAPPS_VENDER") != null) {
+        conf.setConf(AUTO_BROADCASTJOIN_THRESHOLD, Runtime.getRuntime.maxMemory()/8)
+        conf.setConf(CBO_ENABLED, true)
+        conf.setConf(JOIN_REORDER_ENABLED, true)
+      }
+    }
+  }
 }
