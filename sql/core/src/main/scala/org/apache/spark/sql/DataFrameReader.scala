@@ -243,22 +243,26 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
   }
 
   private def fromExternalString(s: String, name: String, dataType: DataType): Any = {
-    dataType match {
-      case BooleanType => s.toBoolean
-      case DateType => DateTimeUtils.fromJavaDate(java.sql.Date.valueOf(s))
-      case TimestampType => DateTimeUtils.fromJavaTimestamp(java.sql.Timestamp.valueOf(s))
-      case ByteType => s.toByte
-      case ShortType => s.toShort
-      case IntegerType => s.toInt
-      case LongType => s.toLong
-      case FloatType => s.toFloat
-      case DoubleType => s.toDouble
-      case _: DecimalType => Decimal(s)
-      // This version of Spark does not use min/max for binary/string types so we ignore it.
-      case BinaryType | StringType => null
-      case _ =>
-        throw new AnalysisException("Column statistics deserialization is not supported for " +
-          s"column $name of data type: $dataType.")
+    if (s == null || s == "null") {
+      null
+    } else {
+      dataType match {
+        case BooleanType => s.toBoolean
+        case DateType => DateTimeUtils.fromJavaDate(java.sql.Date.valueOf(s))
+        case TimestampType => DateTimeUtils.fromJavaTimestamp(java.sql.Timestamp.valueOf(s))
+        case ByteType => s.toByte
+        case ShortType => s.toShort
+        case IntegerType => s.toInt
+        case LongType => s.toLong
+        case FloatType => s.toFloat
+        case DoubleType => s.toDouble
+        case _: DecimalType => Decimal(s)
+        // This version of Spark does not use min/max for binary/string types so we ignore it.
+        case BinaryType | StringType => null
+        case _ =>
+          throw new AnalysisException("Column statistics deserialization is not supported for " +
+            s"column $name of data type: $dataType.")
+      }
     }
   }
 
