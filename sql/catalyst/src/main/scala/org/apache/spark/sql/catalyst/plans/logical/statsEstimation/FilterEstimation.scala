@@ -86,7 +86,7 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       case And(cond1, cond2) =>
         val percent1 = calculateFilterSelectivity(cond1, update).getOrElse(BigDecimal(1.0))
         val percent2 = calculateFilterSelectivity(cond2, update).getOrElse(BigDecimal(1.0))
-        Some(percent1 * percent2)
+        Some(Math.pow((percent1 * percent2).toDouble, 0.5))
 
       case Or(cond1, cond2) =>
         val percent1 = calculateFilterSelectivity(cond1, update = false).getOrElse(BigDecimal(1.0))
