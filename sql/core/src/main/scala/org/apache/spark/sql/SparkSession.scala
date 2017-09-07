@@ -41,6 +41,7 @@ import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.execution.ui.SQLListener
 import org.apache.spark.sql.internal._
+import org.apache.spark.sql.internal.SQLConf._
 import org.apache.spark.sql.internal.StaticSQLConf.CATALOG_IMPLEMENTATION
 import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.streaming._
@@ -909,7 +910,7 @@ object SparkSession {
       // Get the session from current thread's active session.
       var session = activeThreadSession.get()
       if ((session ne null) && !session.sparkContext.isStopped) {
-        DatappsConfigurationEnhancer.enhance(session.sessionState.conf)
+        enhance(session.sessionState.conf, session.sparkContext.conf)
         options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
         if (options.nonEmpty) {
           logWarning("Using an existing SparkSession; some configuration may not take effect.")
@@ -922,7 +923,6 @@ object SparkSession {
         // If the current thread does not have an active session, get it from the global session.
         session = defaultSession.get()
         if ((session ne null) && !session.sparkContext.isStopped) {
-          DatappsConfigurationEnhancer.enhance(session.sessionState.conf)
           options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
           if (options.nonEmpty) {
             logWarning("Using an existing SparkSession; some configuration may not take effect.")
@@ -968,7 +968,7 @@ object SparkSession {
         }
 
         session = new SparkSession(sparkContext, None, None, extensions)
-        DatappsConfigurationEnhancer.enhance(session.sessionState.conf)
+        enhance(session.sessionState.conf, sparkContext.conf)
         options.foreach { case (k, v) => session.sessionState.conf.setConfString(k, v) }
         defaultSession.set(session)
 
@@ -984,6 +984,28 @@ object SparkSession {
       }
 
       return session
+    }
+
+    private[spark] def enhance(conf: SQLConf, sparkConf: SparkConf): Unit = {
+      if (System.getenv("SPARK_DATAPPS_VENDER") != null) {
+        conf.setConf(AUTO_BROADCASTJOIN_THRESHOLD, Runtime.getRuntime.maxMemory()
+          / sparkConf.getInt("spark.executor.instances", 1) / 4)
+        conf.setConf(CBO_ENABLED, true)
+        conf.setConf(JOIN_REORDER_ENABLED, true)
+        conf.setConf(JOIN_REORDER_DP_STAR_FILTER, true)
+        conf.setConf(STARSCHEMA_DETECTION, true)
+        conf.setConf(BROADCAST_TIMEOUT, 10 * 60)
+        var memg = ((Runtime.getRuntime.maxMemory() >> 20)
+          / sparkConf.getInt("spark.executor.instances", 1))
+        memg = Math.max(memg, (Runtime.getRuntime.maxMemory() >> 20)
+          / sparkConf.getInt("spark.executor.instances", 1)) + 512
+        if (memg > 1024) {
+          sparkConf.set("spark.driver.maxResultSize", memg + "m")
+        }
+        logWarning(s"ehanced for datapps.grassland broadcast=" +
+          s"${conf.getConf(AUTO_BROADCASTJOIN_THRESHOLD)}, maxResultSize="
+          + sparkConf.get("spark.driver.maxResultSize", "1g"))
+      }
     }
   }
 
@@ -1098,19 +1120,6 @@ object SparkSession {
       true
     } catch {
       case _: ClassNotFoundException | _: NoClassDefFoundError => false
-    }
-  }
-
-
-
-  object DatappsConfigurationEnhancer {
-    import org.apache.spark.sql.internal.SQLConf._
-    def enhance(conf: SQLConf): Unit = {
-      if (System.getenv("SPARK_DATAPPS_VENDER") != null) {
-        conf.setConf(AUTO_BROADCASTJOIN_THRESHOLD, Runtime.getRuntime.maxMemory()/8)
-        conf.setConf(CBO_ENABLED, true)
-        conf.setConf(JOIN_REORDER_ENABLED, true)
-      }
     }
   }
 }
