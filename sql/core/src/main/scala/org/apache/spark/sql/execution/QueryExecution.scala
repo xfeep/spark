@@ -20,6 +20,7 @@ package org.apache.spark.sql.execution
 import java.nio.charset.StandardCharsets
 import java.sql.{Date, Timestamp}
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{AnalysisException, Row, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -29,6 +30,10 @@ import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.command.{DescribeTableCommand, ExecutedCommandExec, ShowTablesCommand}
 import org.apache.spark.sql.execution.exchange.{EnsureRequirements, ReuseExchange}
+import org.apache.spark.sql.execution.joins.CartesianProductExec
+import org.apache.spark.sql.execution.window.WindowExec
+import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.internal.SQLConf.{CBO_ENABLED, JOIN_REORDER_DP_STAR_FILTER, JOIN_REORDER_ENABLED, STARSCHEMA_DETECTION}
 import org.apache.spark.sql.types.{BinaryType, DateType, DecimalType, TimestampType, _}
 import org.apache.spark.util.Utils
 
@@ -39,7 +44,7 @@ import org.apache.spark.util.Utils
  * While this is not a public class, we should avoid changing the function names for the sake of
  * changing them, because a lot of developers use the feature for debugging.
  */
-class QueryExecution(val sparkSession: SparkSession, val logical: LogicalPlan) {
+class QueryExecution(val sparkSession: SparkSession, val logical: LogicalPlan) extends Logging {
 
   // TODO: Move the planner an optimizer into here from SessionState.
   protected def planner = sparkSession.sessionState.planner
@@ -77,11 +82,61 @@ class QueryExecution(val sparkSession: SparkSession, val logical: LogicalPlan) {
 
   lazy val optimizedPlan: LogicalPlan = sparkSession.sessionState.optimizer.execute(withCachedData)
 
+  def hasCartesianJoin(plan: SparkPlan): Boolean = {
+    plan match {
+      case _ : CartesianProductExec => true
+      case _ => plan.children.exists(hasCartesianJoin(_))
+    }
+  }
+
+  def hasWindowFunction(plan: SparkPlan): Boolean = {
+    plan match {
+      case _ : WindowExec => true
+      case _ => plan.children.exists(hasWindowFunction(_))
+    }
+  }
+
+
+  def setField(obj: Object, name: String, value: Object): Unit = {
+    val field = obj.getClass.getDeclaredField(name)
+    field.setAccessible(true)
+    field.set(this, value)
+  }
+
+
   lazy val sparkPlan: SparkPlan = {
     SparkSession.setActiveSession(sparkSession)
     // TODO: We use next(), i.e. take the first plan returned by the planner, here for now,
     //       but we will implement to choose the best plan.
-    planner.plan(ReturnAnswer(optimizedPlan)).next()
+    var plan: SparkPlan = planner.plan(ReturnAnswer(optimizedPlan)).next()
+    val conf: SQLConf = sparkSession.sessionState.conf
+    if (sparkSession.sessionState.conf.cboEnabled
+      && sparkSession.sessionState.conf.joinReorderEnabled) {
+      if (hasCartesianJoin(plan)) {
+        Utils.tryWithSafeFinally({
+          conf.setConf(CBO_ENABLED, false)
+          setField(this, "optimizedPlan",
+            sparkSession.sessionState.optimizer.execute(withCachedData))
+          plan = planner.plan(ReturnAnswer(optimizedPlan)).next()
+        }) {
+          conf.setConf(CBO_ENABLED, true)
+        }
+      } else if (hasWindowFunction(plan)) {
+        Utils.tryWithSafeFinally({
+          conf.setConf(JOIN_REORDER_ENABLED, false)
+          conf.setConf(JOIN_REORDER_DP_STAR_FILTER, false)
+          conf.setConf(STARSCHEMA_DETECTION, false)
+          setField(this, "optimizedPlan",
+            sparkSession.sessionState.optimizer.execute(withCachedData))
+          plan = planner.plan(ReturnAnswer(optimizedPlan)).next()
+        }) {
+          conf.setConf(JOIN_REORDER_ENABLED, true)
+          conf.setConf(JOIN_REORDER_DP_STAR_FILTER, true)
+          conf.setConf(STARSCHEMA_DETECTION, true)
+        }
+      }
+    }
+    plan
   }
 
   // executedPlan should not be used to initialize any SparkPlan. It should be
