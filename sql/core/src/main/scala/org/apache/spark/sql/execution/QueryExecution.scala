@@ -94,6 +94,7 @@ class QueryExecution(val sparkSession: SparkSession, val logical: LogicalPlan) e
       case _ : WindowExec => true
       case _ => plan.children.exists(hasWindowFunction(_))
     }
+    false
   }
 
 
@@ -121,7 +122,7 @@ class QueryExecution(val sparkSession: SparkSession, val logical: LogicalPlan) e
         }) {
           conf.setConf(CBO_ENABLED, true)
         }
-      } else if (hasWindowFunction(plan)) {
+      }/* else if (hasWindowFunction(plan)) {
         Utils.tryWithSafeFinally({
           conf.setConf(JOIN_REORDER_ENABLED, false)
           conf.setConf(JOIN_REORDER_DP_STAR_FILTER, false)
@@ -134,7 +135,8 @@ class QueryExecution(val sparkSession: SparkSession, val logical: LogicalPlan) e
           conf.setConf(JOIN_REORDER_DP_STAR_FILTER, true)
           conf.setConf(STARSCHEMA_DETECTION, true)
         }
-      }
+      } */
+//      logInfo("we get a new plan")
     }
     plan
   }
