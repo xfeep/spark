@@ -52,6 +52,7 @@ case class Statistics(
     sizeInBytes: BigInt,
     rowCount: Option[BigInt] = None,
     attributeStats: AttributeMap[ColumnStat] = AttributeMap(Nil),
+    histograms: AttributeMap[Histogram] = AttributeMap(Nil),
     hints: HintInfo = HintInfo()) {
 
   override def toString: String = "Statistics(" + simpleString + ")"
@@ -278,4 +279,31 @@ object ColumnStat extends Logging {
     )
   }
 
+}
+
+case class Histogram(
+                      bucket: List[Double],
+                      distinctCount: List[Long],
+                      height: Double
+                    ) {
+  val min = bucket(0)
+  val max = bucket.last
+
+  def getInterval(point: Double): (Double, Long, Int) = {
+    val size = bucket.size
+    var start = 0
+    var end = size - 1
+    var index = 0
+    while (start <= end) {
+      index = (start + end) / 2
+      if (bucket(index) > point) {
+        end = index - 1
+      } else {
+        start = index + 1
+      }
+    }
+    if (start > end) {
+      (bucket(end), distinctCount(end), end)
+    } else (bucket(start), distinctCount(start), start)
+  }
 }

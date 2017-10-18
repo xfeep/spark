@@ -19,7 +19,7 @@ package org.apache.spark.sql.catalyst.statsEstimation
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeMap, AttributeReference}
-import org.apache.spark.sql.catalyst.plans.logical.{ColumnStat, LeafNode, LogicalPlan, Statistics}
+import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.internal.SQLConf.{CASE_SENSITIVE, CBO_ENABLED}
 import org.apache.spark.sql.types.{IntegerType, StringType}
@@ -53,11 +53,13 @@ case class StatsTestPlan(
     outputList: Seq[Attribute],
     rowCount: BigInt,
     attributeStats: AttributeMap[ColumnStat],
+    histograms: AttributeMap[Histogram] = AttributeMap(Nil),
     size: Option[BigInt] = None) extends LeafNode {
   override def output: Seq[Attribute] = outputList
   override def computeStats(conf: SQLConf): Statistics = Statistics(
     // If sizeInBytes is useless in testing, we just use a fake value
     sizeInBytes = size.getOrElse(Int.MaxValue),
     rowCount = Some(rowCount),
-    attributeStats = attributeStats)
+    attributeStats = attributeStats,
+    histograms = histograms)
 }

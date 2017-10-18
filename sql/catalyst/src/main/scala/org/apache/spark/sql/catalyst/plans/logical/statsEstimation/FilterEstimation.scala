@@ -23,7 +23,7 @@ import scala.collection.mutable
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.Literal.{FalseLiteral, TrueLiteral}
-import org.apache.spark.sql.catalyst.plans.logical.{ColumnStat, Filter, LeafNode, Statistics}
+import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans.logical.statsEstimation.EstimationUtils._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -33,6 +33,8 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
   private val childStats = plan.child.stats(catalystConf)
 
   private val colStatsMap = new ColumnStatsMap(childStats.attributeStats)
+
+  private val histogramMap = new HistogramMap(childStats.histograms)
 
   /**
    * Returns an option of Statistics for a Filter logical plan node.
@@ -307,37 +309,62 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       literal: Literal,
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
-    val colStat = colStatsMap(attr)
-    val ndv = colStat.distinctCount
 
-    // decide if the value is in [min, max] of the column.
-    // We currently don't store min/max for binary/string type.
-    // Hence, we assume it is in boundary for binary/string type.
-    val statsRange = Range(colStat.min, colStat.max, attr.dataType)
-    if (statsRange.contains(literal)) {
-      if (update) {
-        // We update ColumnStat structure after apply this equality predicate:
-        // Set distinctCount to 1, nullCount to 0, and min/max values (if exist) to the literal
-        // value.
-        val newStats = attr.dataType match {
-          case StringType | BinaryType =>
-            colStat.copy(distinctCount = 1, nullCount = 0)
-          case _ =>
-            colStat.copy(distinctCount = 1, min = Some(literal.value),
-              max = Some(literal.value), nullCount = 0)
+    if(histogramMap.contains(attr)) {
+      val histogram: Histogram = histogramMap(attr)
+      val statsRange = Range(Option(histogram.min), Option(histogram.max), attr.dataType)
+      if (statsRange.contains(literal)) {
+        if (update) {
+          var avglen = 4
+          attr.dataType match {
+            case _: DecimalType | DoubleType | LongType => avglen = 8
+            case _: FloatType | IntegerType => avglen = 4
+            case _: BinaryType => avglen = 1
+            // TODO : need to add more type
+          }
+          val newStats = ColumnStat(distinctCount = 1, min = Some(literal.value),
+            max = Some(literal.value), nullCount = 0, avgLen = avglen, maxLen = avglen)
+          colStatsMap.update(attr, newStats)
         }
-        colStatsMap.update(attr, newStats)
-      }
-
-      Some(1.0 / BigDecimal(ndv))
+        val (inter, distinctCount, index) = histogram.getInterval(
+          EstimationUtils.toDecimal(literal.value, literal.dataType).toDouble)
+        if(distinctCount == 0) {
+          Some(0.0)
+        } else {
+          Some(1.0 / (distinctCount * (histogram.bucket.size - 1)))
+        }
+      } else Some(0.0)
     } else {
-      Some(0.0)
-    }
+      val colStat = colStatsMap(attr)
+      val ndv = colStat.distinctCount
+      // decide if the value is in [min, max] of the column.
+      // We currently don't store min/max for binary/string type.
+      // Hence, we assume it is in boundary for binary/string type.
+      val statsRange = Range(colStat.min, colStat.max, attr.dataType)
+      if (statsRange.contains(literal)) {
+        if (update) {
+          // We update ColumnStat structure after apply this equality predicate:
+          // Set distinctCount to 1, nullCount to 0, and min/max values (if exist) to the literal
+          // value.
+          val newStats = attr.dataType match {
+            case StringType | BinaryType =>
+              colStat.copy(distinctCount = 1, nullCount = 0)
+            case _ =>
+              colStat.copy(distinctCount = 1, min = Some(literal.value),
+                max = Some(literal.value), nullCount = 0)
+          }
+          colStatsMap.update(attr, newStats)
+        }
 
+        Some(1.0 / BigDecimal(ndv))
+      } else {
+        Some(0.0)
+      }
+    }
   }
 
   /**
@@ -792,4 +819,24 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
     }
     AttributeMap(newColumnStats.toSeq)
   }
+}
+
+case class HistogramMap(originalMap: AttributeMap[Histogram]) {
+
+  /** This map maintains the latest column stats. */
+  private val updatedMap: mutable.Map[ExprId, (Attribute, Histogram)] = mutable.HashMap.empty
+
+  def contains(a: Attribute): Boolean = updatedMap.contains(a.exprId) || originalMap.contains(a)
+
+  def apply(a: Attribute): Histogram = {
+    if (updatedMap.contains(a.exprId)) {
+      updatedMap(a.exprId)._2
+    } else {
+      originalMap(a)
+    }
+  }
+
+  /** Updates column stats in updatedMap. */
+  def update(a: Attribute, stats: Histogram): Unit = updatedMap.update(a.exprId, a -> stats)
+
 }

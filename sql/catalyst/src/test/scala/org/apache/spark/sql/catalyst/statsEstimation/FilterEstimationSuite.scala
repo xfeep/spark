@@ -22,7 +22,7 @@ import java.sql.Date
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.Literal.{FalseLiteral, TrueLiteral}
 import org.apache.spark.sql.catalyst.plans.LeftOuter
-import org.apache.spark.sql.catalyst.plans.logical.{ColumnStat, Filter, Join, Statistics}
+import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans.logical.statsEstimation.EstimationUtils._
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types._
@@ -39,6 +39,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val attrInt = AttributeReference("cint", IntegerType)()
   val colStatInt = ColumnStat(distinctCount = 10, min = Some(1), max = Some(10),
     nullCount = 0, avgLen = 4, maxLen = 4)
+  val histogramStatInt = Histogram(List(1.0, 3.8333333333333335,
+    7.166666666666667, 10.0), List(3, 4, 3, 0), 3.3333333333333335)
 
   // column cbool has only 2 distinct values
   val attrBool = AttributeReference("cbool", BooleanType)()
@@ -101,6 +103,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     attrInt2 -> colStatInt2,
     attrInt3 -> colStatInt3,
     attrInt4 -> colStatInt4
+  ))
+
+  val histograms = AttributeMap(Seq(
+    attrInt -> histogramStatInt
   ))
 
   test("true") {
@@ -186,6 +192,14 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 1)
   }
 
+  test("cint = 4") {
+    validateEstimatedStats(
+      Filter(EqualTo(attrInt, Literal(4)), childStatsTestPlan(Seq(attrInt), 10L)),
+      Seq(attrInt -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      expectedRowCount = 1)
+  }
+
   test("cint <=> 2") {
     validateEstimatedStats(
       Filter(EqualNullSafe(attrInt, Literal(2)), childStatsTestPlan(Seq(attrInt), 10L)),
@@ -233,6 +247,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 5)
   }
+
 
   test("cint > 10") {
     // This is a corner case since max value is 10.
@@ -582,7 +597,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     StatsTestPlan(
       outputList = outList,
       rowCount = tableRowCount,
-      attributeStats = AttributeMap(outList.map(a => a -> attributeMap(a))))
+      attributeStats = AttributeMap(outList.map(a => a -> attributeMap(a))),
+      histograms = AttributeMap(outList.map(a => a -> histograms(a))))
   }
 
   private def validateEstimatedStats(
