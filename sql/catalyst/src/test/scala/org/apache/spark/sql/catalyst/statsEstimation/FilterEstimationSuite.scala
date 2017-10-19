@@ -40,7 +40,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val colStatInt = ColumnStat(distinctCount = 10, min = Some(1), max = Some(10),
     nullCount = 0, avgLen = 4, maxLen = 4)
   val histogramStatInt = Histogram(List(1.0, 3.8333333333333335,
-    7.166666666666667, 10.0), List(3, 4, 3, 0), 3.3333333333333335)
+    7.166666666666667, 10.0), List(3, 4, 3, 0), List(3.3333333333333335))
 
   // column cbool has only 2 distinct values
   val attrBool = AttributeReference("cbool", BooleanType)()

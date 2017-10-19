@@ -282,28 +282,52 @@ object ColumnStat extends Logging {
 }
 
 case class Histogram(
-                      bucket: List[Double],
-                      distinctCount: List[Long],
-                      height: Double
+                      buckets: List[Double],
+                      distinctCounts: List[Long],
+                      heights: List[Double]
                     ) {
-  val min = bucket(0)
-  val max = bucket.last
+  val min = buckets(0)
+  val max = buckets.last
+  val totalNum : Double = {
+    var sum = 0.0
+    if (heights.size == 1) {
+      for (bucket <- buckets) {
+        sum += bucket * heights(0)
+      }
+    } else {
+      for (i <- buckets.indices) {
+        sum += buckets(i) * heights(i)
+      }
+    }
+    sum
+  }
 
-  def getInterval(point: Double): (Double, Long, Int) = {
-    val size = bucket.size
+  def getInterval(point: Double): (Double, Long, Double) = {
+    val size = buckets.size
     var start = 0
     var end = size - 1
+    var height2 = 0.0
     var index = 0
     while (start <= end) {
       index = (start + end) / 2
-      if (bucket(index) > point) {
+      if (buckets(index) > point) {
         end = index - 1
       } else {
         start = index + 1
       }
     }
     if (start > end) {
-      (bucket(end), distinctCount(end), end)
-    } else (bucket(start), distinctCount(start), start)
+      index = end
+    } else {
+      index = start
+    }
+
+    if(heights.size == 1) {
+      height2 = heights(0)
+    } else height2 = heights(index)
+
+    (buckets(index), distinctCounts(index), height2)
   }
+
+
 }

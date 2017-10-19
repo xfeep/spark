@@ -217,8 +217,8 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
     }
 
     val histograms = new scala.collection.mutable.HashMap[String, Histogram]() {
-      override def default(key: String): Histogram = Histogram(bucket = Nil,
-        distinctCount = Nil, height = 0.0)
+      override def default(key: String): Histogram = Histogram(buckets = Nil,
+        distinctCounts = Nil, heights = Nil)
     }
     var catalogStatistics = CatalogStatistics(0)
     extraOptions.foreach(entry => {
@@ -250,12 +250,15 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
         val hist = histograms(fieldName)
         val newHist = parameter match {
           case "buckets" => hist.copy(
-            bucket = value.substring(1, value.length-1).split(",").map(_.trim.toDouble).toList)
+            buckets = value.substring(1, value.length-1).split(",").map(_.trim.toDouble).toList)
           case "distinctEachBucket" => hist.copy(
-            distinctCount = value.substring(1, value.length-1).split(",").map(_.trim.toLong).toList
+            distinctCounts = value.substring(1, value.length-1).split(",").map(_.trim.toLong).toList
           )
-          case "height" => hist.copy(height = value.toLong)
+          case "height" => hist.copy(
+            heights =
+              value.substring(1, value.length-1).split(",").map(_.trim.toDouble).toList)
         }
+        histograms.update(fieldName, newHist)
       }
     })
     catalogStatistics.copy(colStats = columnStats.toMap, histograms = histograms.toMap)

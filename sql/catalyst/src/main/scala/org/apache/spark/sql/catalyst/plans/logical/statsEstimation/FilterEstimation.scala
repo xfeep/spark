@@ -330,12 +330,12 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
             max = Some(literal.value), nullCount = 0, avgLen = avglen, maxLen = avglen)
           colStatsMap.update(attr, newStats)
         }
-        val (inter, distinctCount, index) = histogram.getInterval(
+        val (endpoint, distinctCount, height) = histogram.getInterval(
           EstimationUtils.toDecimal(literal.value, literal.dataType).toDouble)
         if(distinctCount == 0) {
           Some(0.0)
         } else {
-          Some(1.0 / (distinctCount * (histogram.bucket.size - 1)))
+          Some((height / distinctCount) / histogram.totalNum)
         }
       } else Some(0.0)
     } else {
