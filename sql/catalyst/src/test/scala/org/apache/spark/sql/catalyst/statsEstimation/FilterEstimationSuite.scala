@@ -39,8 +39,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val attrInt = AttributeReference("cint", IntegerType)()
   val colStatInt = ColumnStat(distinctCount = 10, min = Some(1), max = Some(10),
     nullCount = 0, avgLen = 4, maxLen = 4)
-  val histogramStatInt = Histogram(List(1.0, 3.8333333333333335,
-    7.166666666666667, 10.0), List(3, 4, 3, 0), List(3.3333333333333335))
+  val histogramStatInt = Histogram(List(1.0, 5.5,
+    10.5, 15.5, 20.0), List(5, 5, 5, 4), List(5.0))
 
   // column cbool has only 2 distinct values
   val attrBool = AttributeReference("cbool", BooleanType)()
@@ -192,10 +192,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 1)
   }
 
-  test("cint = 4") {
+  test("cint = 19") {
     validateEstimatedStats(
-      Filter(EqualTo(attrInt, Literal(4)), childStatsTestPlan(Seq(attrInt), 10L)),
-      Seq(attrInt -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
+      Filter(EqualTo(attrInt, Literal(19)), childStatsTestPlan(Seq(attrInt), 10L)),
+      Seq(attrInt -> ColumnStat(distinctCount = 1, min = Some(19), max = Some(19),
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 1)
   }

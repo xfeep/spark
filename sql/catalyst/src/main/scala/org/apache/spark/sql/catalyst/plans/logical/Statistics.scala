@@ -291,12 +291,10 @@ case class Histogram(
   val totalNum : Double = {
     var sum = 0.0
     if (heights.size == 1) {
-      for (bucket <- buckets) {
-        sum += bucket * heights(0)
-      }
+      sum = buckets.size * heights(0)
     } else {
       for (i <- buckets.indices) {
-        sum += buckets(i) * heights(i)
+        sum += heights(i)
       }
     }
     sum
