@@ -244,7 +244,7 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
       } else if (key == STATISTICS_TOTAL_SIZE) {
         catalogStatistics = catalogStatistics.copy(sizeInBytes = BigInt(value))
       } else if (key.startsWith(STATISTICS_HISTOGRAM_PREFIX)) {
-        val temp = key.substring(STATISTICS_COL_STATS_PREFIX.length).split("\\.")
+        val temp = key.substring(STATISTICS_HISTOGRAM_PREFIX.length).split("\\.")
         val fieldName = temp(0)
         val parameter = temp(1)
         val hist = histograms(fieldName)
