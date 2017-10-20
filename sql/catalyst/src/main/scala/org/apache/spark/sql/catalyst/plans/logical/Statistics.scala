@@ -286,9 +286,9 @@ case class Histogram(
                       distinctCounts: List[Long],
                       heights: List[Double]
                     ) {
-  val min = buckets(0)
-  val max = buckets.last
-  val totalNum : Double = {
+  val min = if (buckets.size == 0) 0 else buckets(0)
+  val max = if (buckets.size == 0) 0 else buckets.last
+  val totalNum : Double = if (buckets.size == 0) 0 else {
     var sum = 0.0
     if (heights.size == 1) {
       sum = (buckets.size - 1) * heights(0)
