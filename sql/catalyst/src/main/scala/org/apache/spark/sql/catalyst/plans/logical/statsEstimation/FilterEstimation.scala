@@ -324,7 +324,7 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
             case _: DecimalType | DoubleType | LongType => avglen = 8
             case _: FloatType | IntegerType => avglen = 4
             case _: BinaryType => avglen = 1
-            case _: DataType => avglen = 4
+            case _: DateType => avglen = 4
             case _ => avglen = 4
             // TODO : need to add more type
           }

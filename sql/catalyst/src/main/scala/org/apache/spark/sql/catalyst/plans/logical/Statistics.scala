@@ -291,7 +291,7 @@ case class Histogram(
   val totalNum : Double = {
     var sum = 0.0
     if (heights.size == 1) {
-      sum = buckets.size * heights(0)
+      sum = (buckets.size - 1) * heights(0)
     } else {
       for (i <- buckets.indices) {
         sum += heights(i)
@@ -322,6 +322,9 @@ case class Histogram(
 
     if(heights.size == 1) {
       height2 = heights(0)
+      if(index != 0) {
+        index = index - 1
+      }
     } else height2 = heights(index)
 
     (buckets(index), distinctCounts(index), height2)

@@ -49,10 +49,18 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
 
   // column cdate has 10 values from 2017-01-01 through 2017-01-10.
   val dMin = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-01"))
-  val dMax = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-10"))
+  val dMax = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-08"))
   val attrDate = AttributeReference("cdate", DateType)()
-  val colStatDate = ColumnStat(distinctCount = 10, min = Some(dMin), max = Some(dMax),
+  val colStatDate = ColumnStat(distinctCount = 8, min = Some(dMin), max = Some(dMax),
     nullCount = 0, avgLen = 4, maxLen = 4)
+
+  // histogram date
+  val histogramStatDate = Histogram(List(DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-01"))
+    , DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-05")),
+    DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-06")),
+    DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-07")),
+    DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-08"))),
+    List(5, 1, 1, 1, 0), List(5.0))
 
   // column cdecimal has 4 values from 0.20 through 0.80 at increment of 0.20.
   val decMin = Decimal("0.200000000000000000")
@@ -106,7 +114,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   ))
 
   val histograms = AttributeMap(Seq(
-    attrInt -> histogramStatInt
+    attrInt -> histogramStatInt,
+    attrDate -> histogramStatDate
   ))
 
   test("true") {
@@ -192,10 +201,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 1)
   }
 
-  test("cint = 19") {
+  test("cint = 4") {
     validateEstimatedStats(
-      Filter(EqualTo(attrInt, Literal(19)), childStatsTestPlan(Seq(attrInt), 10L)),
-      Seq(attrInt -> ColumnStat(distinctCount = 1, min = Some(19), max = Some(19),
+      Filter(EqualTo(attrInt, Literal(4)), childStatsTestPlan(Seq(attrInt), 20L)),
+      Seq(attrInt -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 1)
   }
@@ -380,20 +389,20 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   }
 
   test("cdate = cast('2017-01-02' AS DATE)") {
-    val d20170102 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-02"))
+    val d20170102 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-06"))
     validateEstimatedStats(
       Filter(EqualTo(attrDate, Literal(d20170102, DateType)),
-        childStatsTestPlan(Seq(attrDate), 10L)),
+        childStatsTestPlan(Seq(attrDate), 20L)),
       Seq(attrDate -> ColumnStat(distinctCount = 1, min = Some(d20170102), max = Some(d20170102),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      expectedRowCount = 1)
+      expectedRowCount = 5)
   }
 
   test("cdate < cast('2017-01-03' AS DATE)") {
     val d20170103 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-03"))
     validateEstimatedStats(
       Filter(LessThan(attrDate, Literal(d20170103, DateType)),
-        childStatsTestPlan(Seq(attrDate), 10L)),
+        childStatsTestPlan(Seq(attrDate), 20L)),
       Seq(attrDate -> ColumnStat(distinctCount = 3, min = Some(dMin), max = Some(d20170103),
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 3)
