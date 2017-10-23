@@ -55,6 +55,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     nullCount = 0, avgLen = 4, maxLen = 4)
 
   // histogram date
+  val attrDate2 = AttributeReference("cdate2", DateType)()
   val histogramStatDate = Histogram(List(DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-01"))
     , DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-05")),
     DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-06")),
@@ -73,6 +74,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val attrDouble = AttributeReference("cdouble", DoubleType)()
   val colStatDouble = ColumnStat(distinctCount = 10, min = Some(1.0), max = Some(10.0),
     nullCount = 0, avgLen = 8, maxLen = 8)
+
+  val attrDouble2 = AttributeReference("cdouble2", DoubleType)()
+  val histogramStatDouble = Histogram(List(1.0, 5.5,
+    10.5, 15.5, 20.0), List(1, 1, 1, 1, 1), List(1, 2, 3, 4, 5))
 
   // column cstring has 10 String values:
   // "A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9"
@@ -115,7 +120,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
 
   val histograms = AttributeMap(Seq(
     attrInt -> histogramStatInt,
-    attrDate -> histogramStatDate
+    attrDate2 -> histogramStatDate,
+    attrDouble2 -> histogramStatDouble
   ))
 
   test("true") {
@@ -391,9 +397,9 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   test("cdate = cast('2017-01-02' AS DATE)") {
     val d20170102 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-06"))
     validateEstimatedStats(
-      Filter(EqualTo(attrDate, Literal(d20170102, DateType)),
-        childStatsTestPlan(Seq(attrDate), 20L)),
-      Seq(attrDate -> ColumnStat(distinctCount = 1, min = Some(d20170102), max = Some(d20170102),
+      Filter(EqualTo(attrDate2, Literal(d20170102, DateType)),
+        childStatsTestPlan(Seq(attrDate2), 20L)),
+      Seq(attrDate2 -> ColumnStat(distinctCount = 1, min = Some(d20170102), max = Some(d20170102),
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 5)
   }
@@ -447,6 +453,14 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       Seq(attrDouble -> ColumnStat(distinctCount = 3, min = Some(1.0), max = Some(3.0),
         nullCount = 0, avgLen = 8, maxLen = 8)),
       expectedRowCount = 3)
+  }
+
+  test("cdouble2 = 15.5") {
+    validateEstimatedStats(
+      Filter(EqualTo(attrDouble2, Literal(15.5)), childStatsTestPlan(Seq(attrDouble2), 15L)),
+      Seq(attrDouble2 -> ColumnStat(distinctCount = 1, min = Some(15.5), max = Some(15.5),
+        nullCount = 0, avgLen = 8, maxLen = 8)),
+      expectedRowCount = 4)
   }
 
   test("cstring = 'A2'") {
@@ -606,8 +620,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     StatsTestPlan(
       outputList = outList,
       rowCount = tableRowCount,
-      attributeStats = AttributeMap(outList.map(a => a -> attributeMap(a))),
-      histograms = AttributeMap(outList.map(a => a -> histograms(a))))
+      attributeStats = AttributeMap(outList.filter(attributeMap.contains(_))
+        .map(a => a -> attributeMap(a))),
+      histograms = AttributeMap(outList.filter(histograms.contains(_))
+        .map(a => a -> histograms(a))))
   }
 
   private def validateEstimatedStats(

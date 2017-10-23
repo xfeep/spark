@@ -281,6 +281,24 @@ object ColumnStat extends Logging {
 
 }
 
+/**
+ * At present sitiuation; We support two types of histogram
+ * One is equal-height histogram and the other is enumerate hisogram
+ * we distinct this two types by the size of heights
+ * equal-height histogram: each element of the buckets is
+ *    the left point of interval. the List[i1,i2,i3,i4]
+ *    represent [i1,i2],[i2,i3],[i3,i4].
+ *    the size of height will be 1. Because it is equal-height hist
+ * enumerate histogram: this type of histogram calculate the count distinct value.
+ *    the distinctCounts will be filled by 1.
+ *    if the points are [1,1,1,2,2,3]
+ *    the histogram is bucket:[1,2,3] distinctCount[1,1,1] heights[3,2,1]
+ * @param buckets equal-height: the interval of each bucket
+ *                enumerate: the distinct value
+ * @param distinctCounts the distinctCount of each bucket
+ * @param heights equal-height: the total point of each bucket
+ *                enumerate: the total point of distinct value
+ */
 case class Histogram(
                       buckets: List[Double],
                       distinctCounts: List[Long],

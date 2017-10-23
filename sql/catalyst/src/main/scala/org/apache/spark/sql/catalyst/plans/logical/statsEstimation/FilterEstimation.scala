@@ -811,15 +811,19 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
    */
   def outputColumnStats(rowsBeforeFilter: BigInt, rowsAfterFilter: BigInt)
     : AttributeMap[ColumnStat] = {
-    val newColumnStats = originalMap.map { case (attr, oriColStat) =>
-      // Update ndv based on the overall filter selectivity: scale down ndv if the number of rows
-      // decreases; otherwise keep it unchanged.
-      val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
-        newNumRows = rowsAfterFilter, oldNdv = oriColStat.distinctCount)
-      val colStat = updatedMap.get(attr.exprId).map(_._2).getOrElse(oriColStat)
-      attr -> colStat.copy(distinctCount = newNdv)
+    if (originalMap.isEmpty) {
+      AttributeMap(updatedMap.map(_._2).toSeq)
+    } else {
+      val newColumnStats = originalMap.map { case (attr, oriColStat) =>
+        // Update ndv based on the overall filter selectivity: scale down ndv if the number of rows
+        // decreases; otherwise keep it unchanged.
+        val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
+          newNumRows = rowsAfterFilter, oldNdv = oriColStat.distinctCount)
+        val colStat = updatedMap.get(attr.exprId).map(_._2).getOrElse(oriColStat)
+        attr -> colStat.copy(distinctCount = newNdv)
+      }
+      AttributeMap(newColumnStats.toSeq)
     }
-    AttributeMap(newColumnStats.toSeq)
   }
 }
 
