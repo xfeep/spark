@@ -247,13 +247,13 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 3)
   }
 
-  test("cint < 20") {
+  test("cint < 1.1") {
     validateEstimatedStats(
-      Filter(LessThan(attrInthisto, Literal(20)), childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 20, min = Some(1), max = Some(20),
+      Filter(LessThan(attrInthisto, Literal(1.1)), childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 5, min = Some(1), max = Some(1.1),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(1, 5.5, 10.5, 15.5, 20), List(5, 5, 5, 5, 0), List(5))),
-      expectedRowCount = 19)
+      Seq(attrInthisto -> Histogram(List(1, 1.1), List(5, 0), List(5))),
+      expectedRowCount = 1)
   }
 
   test("cint <= 20") {

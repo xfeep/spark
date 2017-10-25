@@ -365,8 +365,8 @@ case class Histogram(
   }
 
   def lessSum(point: Double) : Double = {
-    equalSum(point) - equalNum(point)
-
+    val res = equalSum(point) - equalNum(point)
+    if (res < 0) buckets(0) / distinctCounts(0) else res
   }
 
   def equalNum(point: Double) : Double = {
