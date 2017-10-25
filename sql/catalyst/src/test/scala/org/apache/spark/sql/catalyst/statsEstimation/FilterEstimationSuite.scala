@@ -509,6 +509,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       Filter(EqualTo(attrDouble2, Literal(20.0)), childStatsTestPlan(Seq(attrDouble2), 15L)),
       Seq(attrDouble2 -> ColumnStat(distinctCount = 1, min = Some(20.0), max = Some(20.0),
         nullCount = 0, avgLen = 8, maxLen = 8)),
+      Seq(attrDouble2 -> Histogram(List(20.0), List(1), List(5))),
       expectedRowCount = 5)
   }
 

@@ -326,13 +326,14 @@ case class Histogram(
 
     for (i <- buckets.indices if flag) {
       if (point <= buckets(i)) {
-        if (i != 0) index = i - 1
+        index = i
         flag = false
       }
     }
 
     if(heights.size == 1) {
       height2 = heights(0)
+      if (index != 0) index = index - 1
     } else height2 = heights(index)
 
     (index, buckets(index), distinctCounts(index), height2)
