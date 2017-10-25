@@ -39,6 +39,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val attrInt = AttributeReference("cint", IntegerType)()
   val colStatInt = ColumnStat(distinctCount = 10, min = Some(1), max = Some(10),
     nullCount = 0, avgLen = 4, maxLen = 4)
+
+  val attrInthisto = AttributeReference("cint", IntegerType)()
   val histogramStatInt = Histogram(List(1.0, 5.5,
     10.5, 15.5, 20.0), List(5, 5, 5, 4), List(5.0))
 
@@ -78,6 +80,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val attrDouble2 = AttributeReference("cdouble2", DoubleType)()
   val histogramStatDouble = Histogram(List(1.0, 5.5,
     10.5, 15.5, 20.0), List(1, 1, 1, 1, 1), List(1, 2, 3, 4, 5))
+
+  val attrDouble3 = AttributeReference("cdouble3", DoubleType)()
+  val histogramStatDouble2 = Histogram(List(0.0, 9.0, 90.0,
+    900.0, 9000.0), List(10, 10, 10, 10, 10), List(100))
 
   // column cstring has 10 String values:
   // "A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9"
@@ -119,9 +125,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   ))
 
   val histograms = AttributeMap(Seq(
-    attrInt -> histogramStatInt,
+    attrInthisto -> histogramStatInt,
     attrDate2 -> histogramStatDate,
-    attrDouble2 -> histogramStatDouble
+    attrDouble2 -> histogramStatDouble,
+    attrDouble3 -> histogramStatDouble2
   ))
 
   test("true") {
@@ -209,9 +216,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
 
   test("cint = 4") {
     validateEstimatedStats(
-      Filter(EqualTo(attrInt, Literal(4)), childStatsTestPlan(Seq(attrInt), 20L)),
-      Seq(attrInt -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
+      Filter(EqualTo(attrInthisto, Literal(4)), childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
         nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrInthisto -> Histogram(List(4), List(1), List(1))),
       expectedRowCount = 1)
   }
 
@@ -395,12 +403,13 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   }
 
   test("cdate = cast('2017-01-02' AS DATE)") {
-    val d20170102 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-06"))
+    val d20170102 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-08"))
     validateEstimatedStats(
       Filter(EqualTo(attrDate2, Literal(d20170102, DateType)),
         childStatsTestPlan(Seq(attrDate2), 20L)),
       Seq(attrDate2 -> ColumnStat(distinctCount = 1, min = Some(d20170102), max = Some(d20170102),
         nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrDate2 -> Histogram(List(d20170102), List(1), List(5))),
       expectedRowCount = 5)
   }
 
@@ -455,12 +464,12 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 3)
   }
 
-  test("cdouble2 = 15.5") {
+  test("cdouble2 = 20.0") {
     validateEstimatedStats(
-      Filter(EqualTo(attrDouble2, Literal(15.5)), childStatsTestPlan(Seq(attrDouble2), 15L)),
-      Seq(attrDouble2 -> ColumnStat(distinctCount = 1, min = Some(15.5), max = Some(15.5),
+      Filter(EqualTo(attrDouble2, Literal(20.0)), childStatsTestPlan(Seq(attrDouble2), 15L)),
+      Seq(attrDouble2 -> ColumnStat(distinctCount = 1, min = Some(20.0), max = Some(20.0),
         nullCount = 0, avgLen = 8, maxLen = 8)),
-      expectedRowCount = 4)
+      expectedRowCount = 5)
   }
 
   test("cstring = 'A2'") {
@@ -629,6 +638,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   private def validateEstimatedStats(
       filterNode: Filter,
       expectedColStats: Seq[(Attribute, ColumnStat)],
+      expectedHistogram: Seq[(Attribute, Histogram)] = Nil,
       expectedRowCount: Int): Unit = {
 
     // If the filter has a binary operator (including those nested inside AND/OR/NOT), swap the
@@ -656,10 +666,12 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
 
     testFilters.foreach { filter =>
       val expectedAttributeMap = AttributeMap(expectedColStats)
+      val expectedAttributeMap2 = AttributeMap(expectedHistogram)
       val expectedStats = Statistics(
         sizeInBytes = getOutputSize(filter.output, expectedRowCount, expectedAttributeMap),
         rowCount = Some(expectedRowCount),
-        attributeStats = expectedAttributeMap)
+        attributeStats = expectedAttributeMap
+      )
 
       val filterStats = filter.stats(conf)
       assert(filterStats.sizeInBytes == expectedStats.sizeInBytes)
@@ -671,9 +683,14 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
         // Need to check attributeStats one by one because we may have multiple output columns.
         // Due to update operation, the output columns may be in different order.
         assert(expectedColStats.size == filterStats.attributeStats.size)
+        assert(expectedHistogram.size == filterStats.histograms.size)
         expectedColStats.foreach { kv =>
           val filterColumnStat = filterStats.attributeStats.get(kv._1).get
           assert(filterColumnStat == kv._2)
+        }
+        expectedHistogram.foreach{ kv =>
+          val filterHistogram = filterStats.histograms.get(kv._1).get
+          assert(filterHistogram == kv._2)
         }
       }
     }

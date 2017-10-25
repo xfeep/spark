@@ -57,13 +57,22 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       // The output is empty, we don't need to keep column stats.
       AttributeMap[ColumnStat](Nil)
     } else {
+      histogramMap.updateColumnStats(colStatsMap,
+        rowsBeforeFilter = childStats.rowCount.get,
+        rowsAfterFilter = filteredRowCount)
       colStatsMap.outputColumnStats(rowsBeforeFilter = childStats.rowCount.get,
         rowsAfterFilter = filteredRowCount)
+    }
+    val newHistogram = if (filteredRowCount == 0) {
+      // The output is empty, we don't need to keep column stats.
+      AttributeMap[Histogram](Nil)
+    } else {
+      histogramMap.outputHistogram()
     }
     val filteredSizeInBytes: BigInt = getOutputSize(plan.output, filteredRowCount, newColStats)
 
     Some(childStats.copy(sizeInBytes = filteredSizeInBytes, rowCount = Some(filteredRowCount),
-      attributeStats = newColStats))
+      attributeStats = newColStats, histograms = newHistogram))
   }
 
   /**
@@ -318,27 +327,18 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       val histogram: Histogram = histogramMap(attr)
       val statsRange = Range(Option(histogram.min), Option(histogram.max), attr.dataType)
       if (statsRange.contains(literal)) {
-        if (update) {
-          var avglen = 4
-          attr.dataType match {
-            case _: DecimalType | DoubleType | LongType => avglen = 8
-            case _: FloatType | IntegerType => avglen = 4
-            case _: BinaryType => avglen = 1
-            case _: DateType => avglen = 4
-            case _ => avglen = 4
-            // TODO : need to add more type
-          }
-          val newStats = ColumnStat(distinctCount = 1, min = Some(literal.value),
-            max = Some(literal.value), nullCount = 0, avgLen = avglen, maxLen = avglen)
-          colStatsMap.update(attr, newStats)
-        }
+        var res = 0.0
         val (endpoint, distinctCount, height) = histogram.getInterval(
           EstimationUtils.toDecimal(literal.value, literal.dataType).toDouble)
-        if(distinctCount == 0) {
-          Some(0.0)
-        } else {
-          Some((height / distinctCount) / histogram.totalNum)
+        if(distinctCount != 0) {
+          res = (height / distinctCount) / histogram.totalNum
         }
+        if (update) {
+          val newHistogram = Histogram(List(literal.value.toString.toDouble), List(1),
+            List(height / distinctCount))
+          histogramMap.update(attr, newHistogram)
+        }
+        Some(res)
       } else Some(0.0)
     } else {
       val colStat = colStatsMap(attr)
@@ -811,25 +811,60 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
    */
   def outputColumnStats(rowsBeforeFilter: BigInt, rowsAfterFilter: BigInt)
     : AttributeMap[ColumnStat] = {
-    if (originalMap.isEmpty) {
-      AttributeMap(updatedMap.map(_._2).toSeq)
-    } else {
-      val newColumnStats = originalMap.map { case (attr, oriColStat) =>
-        // Update ndv based on the overall filter selectivity: scale down ndv if the number of rows
-        // decreases; otherwise keep it unchanged.
-        val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
-          newNumRows = rowsAfterFilter, oldNdv = oriColStat.distinctCount)
-        val colStat = updatedMap.get(attr.exprId).map(_._2).getOrElse(oriColStat)
-        attr -> colStat.copy(distinctCount = newNdv)
-      }
-      AttributeMap(newColumnStats.toSeq)
+    val newColumnStats = originalMap.map { case (attr, oriColStat) =>
+      // Update ndv based on the overall filter selectivity: scale down ndv if the number of rows
+      // decreases; otherwise keep it unchanged.
+      val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
+        newNumRows = rowsAfterFilter, oldNdv = oriColStat.distinctCount)
+      val colStat = updatedMap.get(attr.exprId).map(_._2).getOrElse(oriColStat)
+      attr -> colStat.copy(distinctCount = newNdv)
     }
+    val ColumnStatUpdateByHisotgram =
+      updatedMap.filter( x => {
+      !originalMap.contains(x._2._1)
+    }).map( x => {
+        x._2._1 -> x._2._2
+      })
+    AttributeMap((newColumnStats ++ ColumnStatUpdateByHisotgram).toSeq)
   }
 }
 
 case class HistogramMap(originalMap: AttributeMap[Histogram]) {
+  def outputHistogram() : AttributeMap[Histogram] = {
+    val newHistogram = updatedMap.map((x => {
+      x._2._1 -> x._2._2
+    })).toMap
+    AttributeMap(newHistogram.toSeq)
+  }
 
-  /** This map maintains the latest column stats. */
+
+
+  def updateColumnStats(cm: ColumnStatsMap,
+                        rowsBeforeFilter: BigInt,
+                        rowsAfterFilter: BigInt) : Unit = {
+    originalMap.foreach { case (attr, oriHist) =>
+      var avglen = 4
+      attr.dataType match {
+        case _: DecimalType | DoubleType | LongType => avglen = 8
+        case _: FloatType | IntegerType => avglen = 4
+        case _: BinaryType => avglen = 1
+        case _: DateType => avglen = 4
+        case _ => avglen = 4
+        // TODO : need to add more type
+      }
+      if (updatedMap.contains(attr.exprId)) {
+        cm.update(attr, updatedMap.get(attr.exprId).get._2.toColumnStats(avglen))
+      } else {
+        val stat = oriHist.toColumnStats(avglen)
+        val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
+          newNumRows = rowsAfterFilter, oldNdv = stat.distinctCount)
+        cm.update(attr, stat)
+      }
+    }
+  }
+
+
+  /** This map maintains the latest histogram stats. */
   private val updatedMap: mutable.Map[ExprId, (Attribute, Histogram)] = mutable.HashMap.empty
 
   def contains(a: Attribute): Boolean = updatedMap.contains(a.exprId) || originalMap.contains(a)
@@ -842,7 +877,7 @@ case class HistogramMap(originalMap: AttributeMap[Histogram]) {
     }
   }
 
-  /** Updates column stats in updatedMap. */
+  /** Updates histogram in updatedMap. */
   def update(a: Attribute, stats: Histogram): Unit = updatedMap.update(a.exprId, a -> stats)
 
 }

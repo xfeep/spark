@@ -287,7 +287,7 @@ object ColumnStat extends Logging {
  * we distinct this two types by the size of heights
  * equal-height histogram: each element of the buckets is
  *    the left point of interval. the List[i1,i2,i3,i4]
- *    represent [i1,i2],[i2,i3],[i3,i4].
+ *    represent [i1,i2],(i2,i3],(i3,i4].
  *    the size of height will be 1. Because it is equal-height hist
  * enumerate histogram: this type of histogram calculate the count distinct value.
  *    the distinctCounts will be filled by 1.
@@ -348,5 +348,8 @@ case class Histogram(
     (buckets(index), distinctCounts(index), height2)
   }
 
-
+  def toColumnStats(avgLen : Long) : ColumnStat = {
+    ColumnStat(distinctCount = distinctCounts.sum, min = Some(min), max = Some(max),
+      avgLen = avgLen, nullCount = 0, maxLen = avgLen)
+  }
 }
