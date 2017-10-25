@@ -284,7 +284,7 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       literal: Literal,
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
@@ -328,7 +328,7 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       val statsRange = Range(Option(histogram.min), Option(histogram.max), attr.dataType)
       if (statsRange.contains(literal)) {
         var res = 0.0
-        val (endpoint, distinctCount, height) = histogram.getInterval(
+        val (index, endpoint, distinctCount, height) = histogram.getInterval(
           EstimationUtils.toDecimal(literal.value, literal.dataType).toDouble)
         if(distinctCount != 0) {
           res = (height / distinctCount) / histogram.totalNum
@@ -469,69 +469,148 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       literal: Literal,
       update: Boolean): Option[BigDecimal] = {
 
-    val colStat = colStatsMap(attr)
-    val statsRange = Range(colStat.min, colStat.max, attr.dataType).asInstanceOf[NumericRange]
-    val max = statsRange.max.toBigDecimal
-    val min = statsRange.min.toBigDecimal
-    val ndv = BigDecimal(colStat.distinctCount)
-
-    // determine the overlapping degree between predicate range and column's range
-    val numericLiteral = if (literal.dataType == BooleanType) {
-      if (literal.value.asInstanceOf[Boolean]) BigDecimal(1) else BigDecimal(0)
-    } else {
-      BigDecimal(literal.value.toString)
-    }
-    val (noOverlap: Boolean, completeOverlap: Boolean) = op match {
-      case _: LessThan =>
-        (numericLiteral <= min, numericLiteral > max)
-      case _: LessThanOrEqual =>
-        (numericLiteral < min, numericLiteral >= max)
-      case _: GreaterThan =>
-        (numericLiteral >= max, numericLiteral < min)
-      case _: GreaterThanOrEqual =>
-        (numericLiteral > max, numericLiteral <= min)
-    }
-
     var percent = BigDecimal(1.0)
-    if (noOverlap) {
-      percent = 0.0
-    } else if (completeOverlap) {
-      percent = 1.0
-    } else {
-      // This is the partial overlap case:
-      // Without advanced statistics like histogram, we assume uniform data distribution.
-      // We just prorate the adjusted range over the initial range to compute filter selectivity.
-      assert(max > min)
-      percent = op match {
+    if (histogramMap.contains(attr)) {
+      val histogram: Histogram = histogramMap(attr)
+      val statsRange = Range(Option(histogram.min),
+        Option(histogram.max), attr.dataType).asInstanceOf[NumericRange]
+      val max = statsRange.max.toBigDecimal
+      val min = statsRange.min.toBigDecimal
+      val numericLiteral = if (literal.dataType == BooleanType) {
+        if (literal.value.asInstanceOf[Boolean]) BigDecimal(1) else BigDecimal(0)
+      } else {
+        BigDecimal(literal.value.toString)
+      }
+      val (noOverlap: Boolean, completeOverlap: Boolean) = op match {
         case _: LessThan =>
-          if (numericLiteral == max) {
-            // If the literal value is right on the boundary, we can minus the part of the
-            // boundary value (1/ndv).
-            1.0 - 1.0 / ndv
-          } else {
-            (numericLiteral - min) / (max - min)
-          }
+          (numericLiteral <= min, numericLiteral > max)
         case _: LessThanOrEqual =>
-          if (numericLiteral == min) {
-            // The boundary value is the only satisfying value.
-            1.0 / ndv
-          } else {
-            (numericLiteral - min) / (max - min)
-          }
+          (numericLiteral < min, numericLiteral >= max)
         case _: GreaterThan =>
-          if (numericLiteral == min) {
-            1.0 - 1.0 / ndv
-          } else {
-            (max - numericLiteral) / (max - min)
-          }
+          (numericLiteral >= max, numericLiteral < min)
         case _: GreaterThanOrEqual =>
-          if (numericLiteral == max) {
-            1.0 / ndv
-          } else {
-            (max - numericLiteral) / (max - min)
-          }
+          (numericLiteral > max, numericLiteral <= min)
+      }
+      if (noOverlap) {
+        percent = 0.0
+      } else if (completeOverlap) {
+        percent = 1.0
+      } else {
+        // At present, We already have advanced statistics
+        assert(max > min)
+        percent = op match {
+          case _: LessThan =>
+            histogram.lessSum(numericLiteral.toDouble) / histogram.totalNum
+          case _: LessThanOrEqual =>
+            histogram.equalSum(numericLiteral.toDouble) / histogram.totalNum
+          case _: GreaterThan =>
+            1.0 - (histogram.equalSum(numericLiteral.toDouble) / histogram.totalNum)
+          case _: GreaterThanOrEqual =>
+            1.0 - (histogram.lessSum(numericLiteral.toDouble) / histogram.totalNum)
+        }
       }
 
+      if (update) {
+        val (index, endpoint, distinctcount, height) =
+          histogram.getInterval(numericLiteral.toDouble)
+        var newBuckets : List[Double] = Nil
+        var newDistincts : List[Long] = Nil
+        var newHeight : List[Double] = Nil
+        op match {
+          case _: GreaterThan | _: GreaterThanOrEqual =>
+            if (histogram.heights.size == 1) {
+              newBuckets = histogram.buckets.drop(index + 1)
+              newDistincts = histogram.distinctCounts.drop(index)
+              newHeight = histogram.heights
+            } else {
+              newBuckets = histogram.buckets.drop(index + 1)
+              newDistincts = histogram.distinctCounts.drop(index)
+              newHeight = histogram.heights.drop(index)
+            }
+            newBuckets = numericLiteral.toDouble :: newBuckets
+          case _: LessThan | _: LessThanOrEqual =>
+            if (histogram.heights.size == 1) {
+              newBuckets = histogram.buckets
+                .dropRight(histogram.buckets.size - index - 1)
+              newDistincts = histogram.distinctCounts
+                .dropRight(histogram.distinctCounts.size - index - 1)
+              newHeight = histogram.heights
+            } else {
+              newBuckets = histogram.buckets.
+                dropRight(histogram.buckets.size - index - 1)
+              newDistincts = histogram.distinctCounts.
+                dropRight(histogram.distinctCounts.size - index - 1)
+              newHeight = histogram.heights.dropRight(index)
+            }
+            newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
+            newDistincts = newDistincts.reverse.::(0L).reverse
+        }
+        val newHistogram = Histogram(newBuckets, newDistincts,
+          newHeight)
+        histogramMap.update(attr, newHistogram)
+      }
+    } else {
+      val colStat = colStatsMap(attr)
+      val statsRange = Range(colStat.min, colStat.max, attr.dataType).asInstanceOf[NumericRange]
+      val max = statsRange.max.toBigDecimal
+      val min = statsRange.min.toBigDecimal
+      val ndv = BigDecimal(colStat.distinctCount)
+
+      // determine the overlapping degree between predicate range and column's range
+      val numericLiteral = if (literal.dataType == BooleanType) {
+        if (literal.value.asInstanceOf[Boolean]) BigDecimal(1) else BigDecimal(0)
+      } else {
+        BigDecimal(literal.value.toString)
+      }
+      val (noOverlap: Boolean, completeOverlap: Boolean) = op match {
+        case _: LessThan =>
+          (numericLiteral <= min, numericLiteral > max)
+        case _: LessThanOrEqual =>
+          (numericLiteral < min, numericLiteral >= max)
+        case _: GreaterThan =>
+          (numericLiteral >= max, numericLiteral < min)
+        case _: GreaterThanOrEqual =>
+          (numericLiteral > max, numericLiteral <= min)
+      }
+      if (noOverlap) {
+        percent = 0.0
+      } else if (completeOverlap) {
+        percent = 1.0
+      } else {
+        // This is the partial overlap case:
+        // Without advanced statistics like histogram, we assume uniform data distribution.
+        // We just prorate the adjusted range over the initial range to compute filter selectivity.
+        assert(max > min)
+        percent = op match {
+          case _: LessThan =>
+            if (numericLiteral == max) {
+              // If the literal value is right on the boundary, we can minus the part of the
+              // boundary value (1/ndv).
+              1.0 - 1.0 / ndv
+            } else {
+              (numericLiteral - min) / (max - min)
+            }
+          case _: LessThanOrEqual =>
+            if (numericLiteral == min) {
+              // The boundary value is the only satisfying value.
+              1.0 / ndv
+            } else {
+              (numericLiteral - min) / (max - min)
+            }
+          case _: GreaterThan =>
+            if (numericLiteral == min) {
+              1.0 - 1.0 / ndv
+            } else {
+              (max - numericLiteral) / (max - min)
+            }
+          case _: GreaterThanOrEqual =>
+            if (numericLiteral == max) {
+              1.0 / ndv
+            } else {
+              (max - numericLiteral) / (max - min)
+            }
+        }
+    }
       if (update) {
         val newValue = Some(literal.value)
         var newMax = colStat.max

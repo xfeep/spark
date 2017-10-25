@@ -318,38 +318,63 @@ case class Histogram(
     sum
   }
 
-  def getInterval(point: Double): (Double, Long, Double) = {
+  def getInterval(point: Double): (Int, Double, Long, Double) = {
     val size = buckets.size
-    var start = 0
-    var end = size - 1
     var height2 = 0.0
     var index = 0
-    while (start <= end) {
-      index = (start + end) / 2
-      if (buckets(index) > point) {
-        end = index - 1
-      } else {
-        start = index + 1
+    var flag = true
+
+    for (i <- buckets.indices if flag) {
+      if (point <= buckets(i)) {
+        if (i != 0) index = i - 1
+        flag = false
       }
-    }
-    if (start > end) {
-      index = end
-    } else {
-      index = start
     }
 
     if(heights.size == 1) {
       height2 = heights(0)
-      if(index != 0) {
-        index = index - 1
-      }
     } else height2 = heights(index)
 
-    (buckets(index), distinctCounts(index), height2)
+    (index, buckets(index), distinctCounts(index), height2)
   }
 
   def toColumnStats(avgLen : Long) : ColumnStat = {
     ColumnStat(distinctCount = distinctCounts.sum, min = Some(min), max = Some(max),
       avgLen = avgLen, nullCount = 0, maxLen = avgLen)
   }
+
+  def equalSum(point: Double) : Double = {
+    val (index, endPoint, distinct, height) = getInterval(point)
+    var sum = 0.0
+    if (endPoint == max) {
+      totalNum
+    } else if (heights.size == 1) {
+      val rateOnBucket = (point - endPoint) / (buckets(index + 1) - endPoint)
+      val heightOnBucket = rateOnBucket * height
+      for (i <- 0 until index) {
+        sum += height
+      }
+      sum += heightOnBucket
+    } else {
+      for (i <- 0 to index) {
+        sum += height
+      }
+    }
+    sum
+  }
+
+  def lessSum(point: Double) : Double = {
+    equalSum(point) - equalNum(point)
+
+  }
+
+  def equalNum(point: Double) : Double = {
+    val (index, endPoint, distinct, height) = getInterval(point)
+    var res = 0.0
+    if(distinct != 0) {
+      res = height / distinct
+    }
+    res
+  }
+
 }

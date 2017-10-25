@@ -42,7 +42,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
 
   val attrInthisto = AttributeReference("cint", IntegerType)()
   val histogramStatInt = Histogram(List(1.0, 5.5,
-    10.5, 15.5, 20.0), List(5, 5, 5, 4), List(5.0))
+    10.5, 15.5, 20.0), List(5, 5, 5, 5, 0), List(5.0))
 
   // column cbool has only 2 distinct values
   val attrBool = AttributeReference("cbool", BooleanType)()
@@ -246,6 +246,46 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 3)
   }
+
+  test("cint < 20") {
+    validateEstimatedStats(
+      Filter(LessThan(attrInthisto, Literal(20)), childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 20, min = Some(1), max = Some(20),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrInthisto -> Histogram(List(1, 5.5, 10.5, 15.5, 20), List(5, 5, 5, 5, 0), List(5))),
+      expectedRowCount = 19)
+  }
+
+  test("cint <= 20") {
+    validateEstimatedStats(
+      Filter(LessThanOrEqual(attrInthisto, Literal(20)),
+        childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 20, min = Some(1), max = Some(20),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrInthisto -> Histogram(List(1, 5.5, 10.5, 15.5, 20), List(5, 5, 5, 5, 0), List(5))),
+      expectedRowCount = 20)
+  }
+
+  test("cint >= 4") {
+    validateEstimatedStats(
+      Filter(GreaterThanOrEqual(attrInthisto, Literal(4)),
+        childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 20, min = Some(4), max = Some(20),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrInthisto -> Histogram(List(4, 5.5, 10.5, 15.5, 20), List(5, 5, 5, 5, 0), List(5))),
+      expectedRowCount = 18)
+  }
+
+  test("cint > 4") {
+    validateEstimatedStats(
+      Filter(GreaterThan(attrInthisto, Literal(4)),
+        childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 20, min = Some(4), max = Some(20),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrInthisto -> Histogram(List(4, 5.5, 10.5, 15.5, 20), List(5, 5, 5, 5, 0), List(5))),
+      expectedRowCount = 17)
+  }
+
 
   test("cint < 0") {
     // This is a corner case since literal 0 is smaller than min.
