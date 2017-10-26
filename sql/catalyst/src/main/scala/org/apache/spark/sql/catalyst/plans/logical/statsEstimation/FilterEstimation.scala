@@ -97,7 +97,7 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       case And(cond1, cond2) =>
         val percent1 = calculateFilterSelectivity(cond1, update).getOrElse(BigDecimal(1.0))
         val percent2 = calculateFilterSelectivity(cond2, update).getOrElse(BigDecimal(1.0))
-        Some(Math.pow((percent1 * percent2).toDouble, 0.5))
+        Some(percent1 * percent2)
 
       case Or(cond1, cond2) =>
         val percent1 = calculateFilterSelectivity(cond1, update = false).getOrElse(BigDecimal(1.0))
@@ -516,38 +516,102 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
         var newBuckets : List[Double] = Nil
         var newDistincts : List[Long] = Nil
         var newHeight : List[Double] = Nil
+        // Construct new histogram
         op match {
-          case _: GreaterThan | _: GreaterThanOrEqual =>
+          case _: GreaterThan =>
+            // equal-height
             if (histogram.heights.size == 1) {
-              newBuckets = histogram.buckets.drop(index + 1)
-              newDistincts = histogram.distinctCounts.drop(index)
-              newHeight = histogram.heights
+              // if the point on the boundary
+              if (histogram.buckets.contains(numericLiteral.toDouble)
+                && numericLiteral.toDouble != histogram.buckets(0)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index)
+                newHeight = histogram.heights
+                newBuckets = numericLiteral.toDouble :: newBuckets
+              }
             } else {
-              newBuckets = histogram.buckets.drop(index + 1)
+              if (histogram.buckets.contains(numericLiteral.toDouble)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index)
+                newDistincts = histogram.distinctCounts.drop(index)
+                newHeight = histogram.heights.drop(index)
+              }
+            }
+          case  _: GreaterThanOrEqual =>
+            if (histogram.heights.size == 1) {
+              if (histogram.buckets.contains(numericLiteral.toDouble)
+                && numericLiteral.toDouble != histogram.buckets(0)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index)
+                newHeight = histogram.heights
+                newBuckets = numericLiteral.toDouble :: newBuckets
+              }
+            } else {
+              newBuckets = histogram.buckets.drop(index)
               newDistincts = histogram.distinctCounts.drop(index)
               newHeight = histogram.heights.drop(index)
             }
-            newBuckets = numericLiteral.toDouble :: newBuckets
-          case _: LessThan | _: LessThanOrEqual =>
+          case _: LessThan =>
             if (histogram.heights.size == 1) {
               newBuckets = histogram.buckets
                 .dropRight(histogram.buckets.size - index - 1)
               newDistincts = histogram.distinctCounts
                 .dropRight(histogram.distinctCounts.size - index - 1)
               newHeight = histogram.heights
+              newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
+              newDistincts = newDistincts.reverse.::(0L).reverse
             } else {
               newBuckets = histogram.buckets.
-                dropRight(histogram.buckets.size - index - 1)
+                dropRight(histogram.buckets.size - index)
               newDistincts = histogram.distinctCounts.
-                dropRight(histogram.distinctCounts.size - index - 1)
-              newHeight = histogram.heights.dropRight(index)
+                dropRight(histogram.distinctCounts.size - index)
+              newHeight = histogram.heights.
+                dropRight(histogram.distinctCounts.size - index)
             }
-            newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
-            newDistincts = newDistincts.reverse.::(0L).reverse
+          case _: LessThanOrEqual =>
+            if (histogram.heights.size == 1) {
+              newBuckets = histogram.buckets
+                .dropRight(histogram.buckets.size - index - 1)
+              newDistincts = histogram.distinctCounts
+                .dropRight(histogram.distinctCounts.size - index - 1)
+              newHeight = histogram.heights
+              newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
+              newDistincts = newDistincts.reverse.::(0L).reverse
+            } else {
+              if (histogram.buckets.contains(numericLiteral.toDouble)) {
+                newBuckets = histogram.buckets.
+                  dropRight(histogram.buckets.size - index - 1)
+                newDistincts = histogram.distinctCounts.
+                  dropRight(histogram.distinctCounts.size - index - 1)
+                newHeight = histogram.heights.
+                  dropRight(histogram.distinctCounts.size - index - 1)
+              } else {
+                newBuckets = histogram.buckets.
+                  dropRight(histogram.buckets.size - index)
+                newDistincts = histogram.distinctCounts.
+                  dropRight(histogram.distinctCounts.size - index)
+                newHeight = histogram.heights.dropRight(histogram.distinctCounts.size - index)
+              }
+
+            }
+
         }
-        val newHistogram = Histogram(newBuckets, newDistincts,
-          newHeight)
-        histogramMap.update(attr, newHistogram)
+        if (newBuckets.size != 0) {
+          val newHistogram = Histogram(newBuckets, newDistincts,
+            newHeight)
+          histogramMap.update(attr, newHistogram)
+        }
       }
     } else {
       val colStat = colStatsMap(attr)

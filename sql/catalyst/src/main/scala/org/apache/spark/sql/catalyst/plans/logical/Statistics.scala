@@ -358,24 +358,22 @@ case class Histogram(
       sum += heightOnBucket
     } else {
       for (i <- 0 to index) {
-        sum += height
+        sum += heights(i)
       }
     }
     sum
   }
 
   def lessSum(point: Double) : Double = {
-    val res = equalSum(point) - equalNum(point)
-    if (res < 0) buckets(0) / distinctCounts(0) else res
-  }
-
-  def equalNum(point: Double) : Double = {
-    val (index, endPoint, distinct, height) = getInterval(point)
-    var res = 0.0
-    if(distinct != 0) {
-      res = height / distinct
+    if (heights.size == 1) {
+      equalSum(point)
+    } else {
+      val (index, endPoint, distinct, height) = getInterval(point)
+      var sum = 0.0
+      for (i <- 0 until index) {
+        sum += heights(i)
+      }
+      sum
     }
-    res
   }
-
 }
