@@ -55,9 +55,9 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
 
   // column cdate has 10 values from 2017-01-01 through 2017-01-10.
   val dMin = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-01"))
-  val dMax = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-08"))
+  val dMax = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-10"))
   val attrDate = AttributeReference("cdate", DateType)()
-  val colStatDate = ColumnStat(distinctCount = 8, min = Some(dMin), max = Some(dMax),
+  val colStatDate = ColumnStat(distinctCount = 10, min = Some(dMin), max = Some(dMax),
     nullCount = 0, avgLen = 4, maxLen = 4)
 
   // histogram date
@@ -219,7 +219,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 1)
   }
 
-  test("cint = 4") {
+  test("cint = 4 with histogram") {
     validateEstimatedStats(
       Filter(EqualTo(attrInthisto, Literal(4)), childStatsTestPlan(Seq(attrInthisto), 20L)),
       Seq(attrInthisto -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
@@ -290,10 +290,6 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       Seq(attrIntHisto2 -> Histogram(List(2, 3, 4), List(1, 1, 1), List(1, 2, 100000))),
       expectedRowCount = 100003)
   }
-
-
-
-
   test("cint < 1.1") {
     validateEstimatedStats(
       Filter(LessThan(attrInthisto, Literal(1.1)), childStatsTestPlan(Seq(attrInthisto), 20L)),
@@ -320,7 +316,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       Seq(attrInthisto -> ColumnStat(distinctCount = 20, min = Some(4), max = Some(20),
         nullCount = 0, avgLen = 4, maxLen = 4)),
       Seq(attrInthisto -> Histogram(List(4, 5.5, 10.5, 15.5, 20), List(5, 5, 5, 5, 0), List(5))),
-      expectedRowCount = 18)
+      expectedRowCount = 17)
   }
 
   test("cint > 4") {
@@ -409,11 +405,31 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 4)
   }
 
+  test("cint > 3 AND cint <= 6 with histogram") {
+    val condition = And(GreaterThan(attrInthisto, Literal(3)),
+      LessThanOrEqual(attrInthisto, Literal(6)))
+    validateEstimatedStats(
+      Filter(condition, childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 10, min = Some(3), max = Some(6),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrInthisto -> Histogram(List(3, 5.5, 6), List(5, 5, 0), List(5))),
+      expectedRowCount = 5)
+  }
+
   test("cint = 3 OR cint = 6") {
     val condition = Or(EqualTo(attrInt, Literal(3)), EqualTo(attrInt, Literal(6)))
     validateEstimatedStats(
       Filter(condition, childStatsTestPlan(Seq(attrInt), 10L)),
       Seq(attrInt -> colStatInt.copy(distinctCount = 2)),
+      expectedRowCount = 2)
+  }
+
+  test("cint = 3 OR cint = 6 with histogram") {
+    val condition = Or(EqualTo(attrInthisto, Literal(3)), EqualTo(attrInthisto, Literal(6)))
+    validateEstimatedStats(
+      Filter(condition, childStatsTestPlan(Seq(attrInthisto), 20L)),
+      Seq(attrInthisto -> ColumnStat(distinctCount = 2, min = Some(1), max = Some(20),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 2)
   }
 
@@ -504,7 +520,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     val d20170103 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-03"))
     validateEstimatedStats(
       Filter(LessThan(attrDate, Literal(d20170103, DateType)),
-        childStatsTestPlan(Seq(attrDate), 20L)),
+        childStatsTestPlan(Seq(attrDate), 10L)),
       Seq(attrDate -> ColumnStat(distinctCount = 3, min = Some(dMin), max = Some(d20170103),
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 3)
@@ -705,9 +721,9 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     validateEstimatedStats(
       Filter(condition, childStatsTestPlan(Seq(attrInt, attrInt4, attrString), 10L)),
       Seq(
-        attrInt -> ColumnStat(distinctCount = 5, min = Some(3), max = Some(10),
+        attrInt -> ColumnStat(distinctCount = 8, min = Some(3), max = Some(10),
           nullCount = 0, avgLen = 4, maxLen = 4),
-        attrInt4 -> ColumnStat(distinctCount = 5, min = Some(1), max = Some(6),
+        attrInt4 -> ColumnStat(distinctCount = 6, min = Some(1), max = Some(6),
           nullCount = 0, avgLen = 4, maxLen = 4),
         attrString -> colStatString.copy(distinctCount = 5)),
       expectedRowCount = 5)

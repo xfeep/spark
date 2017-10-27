@@ -954,7 +954,13 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
    */
   def outputColumnStats(rowsBeforeFilter: BigInt, rowsAfterFilter: BigInt)
     : AttributeMap[ColumnStat] = {
-    val newColumnStats = originalMap.map { case (attr, oriColStat) =>
+    val ColumnStatUpdateByHistogram =
+      updatedMap.map( x => {
+        x._2._1 -> x._2._2
+      })
+    val newColumnStats = originalMap.filter(x => {
+      !ColumnStatUpdateByHistogram.contains(x._1)
+    }).map { case (attr, oriColStat) =>
       // Update ndv based on the overall filter selectivity: scale down ndv if the number of rows
       // decreases; otherwise keep it unchanged.
       val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
@@ -962,13 +968,7 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
       val colStat = updatedMap.get(attr.exprId).map(_._2).getOrElse(oriColStat)
       attr -> colStat.copy(distinctCount = newNdv)
     }
-    val ColumnStatUpdateByHisotgram =
-      updatedMap.filter( x => {
-      !originalMap.contains(x._2._1)
-    }).map( x => {
-        x._2._1 -> x._2._2
-      })
-    AttributeMap((newColumnStats ++ ColumnStatUpdateByHisotgram).toSeq)
+    AttributeMap((newColumnStats ++ ColumnStatUpdateByHistogram).toSeq)
   }
 }
 
@@ -1001,7 +1001,7 @@ case class HistogramMap(originalMap: AttributeMap[Histogram]) {
         val stat = oriHist.toColumnStats(avglen)
         val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
           newNumRows = rowsAfterFilter, oldNdv = stat.distinctCount)
-        cm.update(attr, stat)
+        cm.update(attr, stat.copy(distinctCount = newNdv))
       }
     }
   }
