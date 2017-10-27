@@ -132,7 +132,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     attrInthisto -> histogramStatInt,
     attrDate2 -> histogramStatDate,
     attrDouble2 -> histogramStatDouble,
-    attrDouble3 -> histogramStatDouble2
+    attrDouble3 -> histogramStatDouble2,
+    attrIntHisto2 -> histogramStatInt2
   ))
 
   test("true") {
@@ -251,6 +252,48 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 3)
   }
 
+  test("cint3 < 4 with histogram") {
+    validateEstimatedStats(
+      Filter(LessThan(attrIntHisto2, Literal(4)), childStatsTestPlan(Seq(attrIntHisto2), 100004L)),
+      Seq(attrIntHisto2 -> ColumnStat(distinctCount = 3, min = Some(1), max = Some(3),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrIntHisto2 -> Histogram(List(1, 2, 3), List(1, 1, 1), List(1, 1, 2))),
+      expectedRowCount = 4)
+  }
+
+  test("cint3 <= 3 with histogram") {
+    validateEstimatedStats(
+      Filter(LessThanOrEqual(attrIntHisto2, Literal(3)),
+        childStatsTestPlan(Seq(attrIntHisto2), 100004L)),
+      Seq(attrIntHisto2 -> ColumnStat(distinctCount = 3, min = Some(1), max = Some(3),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrIntHisto2 -> Histogram(List(1, 2, 3), List(1, 1, 1), List(1, 1, 2))),
+      expectedRowCount = 4)
+  }
+
+  test("cint3 > 1 with histogram") {
+    validateEstimatedStats(
+      Filter(GreaterThan(attrIntHisto2, Literal(1)),
+        childStatsTestPlan(Seq(attrIntHisto2), 100004L)),
+      Seq(attrIntHisto2 -> ColumnStat(distinctCount = 3, min = Some(2), max = Some(4),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrIntHisto2 -> Histogram(List(2, 3, 4), List(1, 1, 1), List(1, 2, 100000))),
+      expectedRowCount = 100003)
+  }
+
+  test("cint3 => 2 with histogram") {
+    validateEstimatedStats(
+      Filter(GreaterThanOrEqual(attrIntHisto2, Literal(2)),
+        childStatsTestPlan(Seq(attrIntHisto2), 100004L)),
+      Seq(attrIntHisto2 -> ColumnStat(distinctCount = 3, min = Some(2), max = Some(4),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrIntHisto2 -> Histogram(List(2, 3, 4), List(1, 1, 1), List(1, 2, 100000))),
+      expectedRowCount = 100003)
+  }
+
+
+
+
   test("cint < 1.1") {
     validateEstimatedStats(
       Filter(LessThan(attrInthisto, Literal(1.1)), childStatsTestPlan(Seq(attrInthisto), 20L)),
@@ -260,7 +303,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 1)
   }
 
-  test("cint <= 20") {
+  test("cint <= 20 with histogram") {
     validateEstimatedStats(
       Filter(LessThanOrEqual(attrInthisto, Literal(20)),
         childStatsTestPlan(Seq(attrInthisto), 20L)),
