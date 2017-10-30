@@ -333,11 +333,9 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
         if(distinctCount != 0) {
           res = (height / distinctCount) / histogram.totalNum
         }
-        if (update) {
-          val newHistogram = Histogram(List(literal.value.toString.toDouble), List(1),
-            List(height / distinctCount))
-          histogramMap.update(attr, newHistogram)
-        }
+        val newHistogram = Histogram(List(literal.value.toString.toDouble), List(1),
+          List(height / distinctCount))
+        histogramMap.update(attr, newHistogram)
         Some(res)
       } else Some(0.0)
     } else {
@@ -495,83 +493,55 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
         percent = 0.0
       } else if (completeOverlap) {
         percent = 1.0
+        histogramMap.update(attr, histogram)
       } else {
-        // At present, We already have advanced statistics
+        // We have advanced statistics
         assert(max > min)
+        // must update the histogram
+        val (index, endPoint, distinctcount, height) =
+          histogram.getInterval(numericLiteral.toDouble)
+        var newBuckets: List[Double] = Nil
+        var newDistincts: List[Long] = Nil
+        var newHeight: List[Double] = Nil
+        val point = numericLiteral.toDouble
+
         percent = op match {
           case _: LessThan =>
-            histogram.lessSum(numericLiteral.toDouble) / histogram.totalNum
-          case _: LessThanOrEqual =>
-            histogram.equalSum(numericLiteral.toDouble) / histogram.totalNum
-          case _: GreaterThan =>
-            1.0 - (histogram.equalSum(numericLiteral.toDouble) / histogram.totalNum)
-          case _: GreaterThanOrEqual =>
-            1.0 - (histogram.lessSum(numericLiteral.toDouble) / histogram.totalNum)
-        }
-      }
-
-      if (update) {
-        val (index, endpoint, distinctcount, height) =
-          histogram.getInterval(numericLiteral.toDouble)
-        var newBuckets : List[Double] = Nil
-        var newDistincts : List[Long] = Nil
-        var newHeight : List[Double] = Nil
-        // Construct new histogram
-        op match {
-          case _: GreaterThan =>
-            // equal-height
-            if (histogram.heights.size == 1) {
-              // if the point on the boundary
-              if (histogram.buckets.contains(numericLiteral.toDouble)
-                && numericLiteral.toDouble != histogram.buckets(0)) {
-                newBuckets = histogram.buckets.drop(index + 1)
-                newDistincts = histogram.distinctCounts.drop(index + 1)
-                newHeight = histogram.heights.drop(index + 1)
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              if (point == max) {
+                distinctOnBucket = distinctcount - 1
+                if(distinctOnBucket > 0) {
+                  heightOnBucket = height - height / distinctcount
+                  sum = histogram.totalNum - height / distinctcount
+                } else {
+                  sum = histogram.totalNum
+                }
               } else {
-                newBuckets = histogram.buckets.drop(index + 1)
-                newDistincts = histogram.distinctCounts.drop(index)
-                newHeight = histogram.heights
-                newBuckets = numericLiteral.toDouble :: newBuckets
+                val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+                heightOnBucket = rateOnBucket * height
+                distinctOnBucket = ceil(rateOnBucket * distinctcount).toLong
+                for (i <- 0 until index) {
+                  sum += histogram.heights(i)
+                }
+                sum += heightOnBucket
               }
-            } else {
-              if (histogram.buckets.contains(numericLiteral.toDouble)) {
-                newBuckets = histogram.buckets.drop(index + 1)
-                newDistincts = histogram.distinctCounts.drop(index + 1)
-                newHeight = histogram.heights.drop(index + 1)
-              } else {
-                newBuckets = histogram.buckets.drop(index)
-                newDistincts = histogram.distinctCounts.drop(index)
-                newHeight = histogram.heights.drop(index)
-              }
-            }
-          case  _: GreaterThanOrEqual =>
-            if (histogram.heights.size == 1) {
-              if (histogram.buckets.contains(numericLiteral.toDouble)
-                && numericLiteral.toDouble != histogram.buckets(0)) {
-                newBuckets = histogram.buckets.drop(index + 1)
-                newDistincts = histogram.distinctCounts.drop(index + 1)
-                newHeight = histogram.heights.drop(index + 1)
-              } else {
-                newBuckets = histogram.buckets.drop(index + 1)
-                newDistincts = histogram.distinctCounts.drop(index)
-                newHeight = histogram.heights
-                newBuckets = numericLiteral.toDouble :: newBuckets
-              }
-            } else {
-              newBuckets = histogram.buckets.drop(index)
-              newDistincts = histogram.distinctCounts.drop(index)
-              newHeight = histogram.heights.drop(index)
-            }
-          case _: LessThan =>
-            if (histogram.heights.size == 1) {
+              // update
               newBuckets = histogram.buckets
                 .dropRight(histogram.buckets.size - index - 1)
               newDistincts = histogram.distinctCounts
-                .dropRight(histogram.distinctCounts.size - index - 1)
+                .dropRight(histogram.distinctCounts.size - index)
               newHeight = histogram.heights
+                .dropRight(histogram.distinctCounts.size - index)
               newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
-              newDistincts = newDistincts.reverse.::(0L).reverse
+              newDistincts = ((newDistincts.reverse.::(distinctOnBucket)).::(0L)).reverse
+              newHeight = ((newHeight.reverse.::(heightOnBucket)).::(0.0)).reverse
             } else {
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
               newBuckets = histogram.buckets.
                 dropRight(histogram.buckets.size - index)
               newDistincts = histogram.distinctCounts.
@@ -579,16 +549,33 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
               newHeight = histogram.heights.
                 dropRight(histogram.distinctCounts.size - index)
             }
+            sum / histogram.totalNum
+
           case _: LessThanOrEqual =>
-            if (histogram.heights.size == 1) {
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+              heightOnBucket = rateOnBucket * height
+              distinctOnBucket = ceil(rateOnBucket * distinctcount).toLong
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
+              sum += heightOnBucket
               newBuckets = histogram.buckets
                 .dropRight(histogram.buckets.size - index - 1)
               newDistincts = histogram.distinctCounts
-                .dropRight(histogram.distinctCounts.size - index - 1)
+                .dropRight(histogram.distinctCounts.size - index)
               newHeight = histogram.heights
+                .dropRight(histogram.distinctCounts.size - index)
               newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
-              newDistincts = newDistincts.reverse.::(0L).reverse
+              newDistincts = ((newDistincts.reverse.::(distinctOnBucket)).::(0L)).reverse
+              newHeight = ((newHeight.reverse.::(heightOnBucket)).::(0.0)).reverse
             } else {
+              for (i <- 0 to index) {
+                sum += histogram.heights(i)
+              }
               if (histogram.buckets.contains(numericLiteral.toDouble)) {
                 newBuckets = histogram.buckets.
                   dropRight(histogram.buckets.size - index - 1)
@@ -603,10 +590,93 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
                   dropRight(histogram.distinctCounts.size - index)
                 newHeight = histogram.heights.dropRight(histogram.distinctCounts.size - index)
               }
-
             }
 
+            sum / histogram.totalNum
+          case _: GreaterThan =>
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+              heightOnBucket = (1 - rateOnBucket) * height
+              distinctOnBucket = ceil((1 - rateOnBucket) * distinctcount).toLong
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
+              sum += rateOnBucket * height
+
+              // if the point on the boundary
+              if (histogram.buckets.contains(numericLiteral.toDouble)
+                && numericLiteral.toDouble != histogram.buckets(0)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+                newBuckets = numericLiteral.toDouble :: newBuckets
+                newDistincts = distinctOnBucket :: newDistincts
+                newHeight = heightOnBucket :: newHeight
+              }
+            } else {
+              for (i <- 0 to index) {
+                sum += histogram.heights(i)
+              }
+              if (histogram.buckets.contains(numericLiteral.toDouble)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index)
+                newDistincts = histogram.distinctCounts.drop(index)
+                newHeight = histogram.heights.drop(index)
+              }
+            }
+            1.0 - (sum / histogram.totalNum)
+          case _: GreaterThanOrEqual =>
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              if (endPoint == max) {
+                sum = histogram.totalNum
+              } else {
+                val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+                heightOnBucket = (1 - rateOnBucket) * height
+                distinctOnBucket = ceil((1 - rateOnBucket) * distinctcount).toLong
+                for (i <- 0 until index) {
+                  sum += histogram.heights(i)
+                }
+                sum += rateOnBucket * height
+              }
+              // if the point on the boundary
+              if (histogram.buckets.contains(numericLiteral.toDouble)
+                && numericLiteral.toDouble != histogram.buckets(0)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+                newBuckets = numericLiteral.toDouble :: newBuckets
+                newDistincts = distinctOnBucket :: newDistincts
+                newHeight = heightOnBucket :: newHeight
+
+              }
+            } else {
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
+              newBuckets = histogram.buckets.drop(index)
+              newDistincts = histogram.distinctCounts.drop(index)
+              newHeight = histogram.heights.drop(index)
+            }
+            1.0 - (sum / histogram.totalNum)
         }
+        // Construct new histogram
         if (newBuckets.size != 0) {
           val newHistogram = Histogram(newBuckets, newDistincts,
             newHeight)
@@ -692,7 +762,6 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
 
         val newStats =
           colStat.copy(distinctCount = newNdv, min = newMin, max = newMax, nullCount = 0)
-
         colStatsMap.update(attr, newStats)
       }
     }

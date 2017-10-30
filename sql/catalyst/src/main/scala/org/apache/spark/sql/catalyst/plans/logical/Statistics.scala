@@ -284,11 +284,12 @@ object ColumnStat extends Logging {
 /**
  * At present sitiuation; We support two types of histogram
  * One is equal-height histogram and the other is enumerate hisogram
- * we distinct this two types by the size of heights
+ * we distinct this two types by the last element of heights
  * equal-height histogram: each element of the buckets is
- *    the left point of interval. the List[i1,i2,i3,i4]
- *    represent [i1,i2],(i2,i3],(i3,i4].
- *    the size of height will be 1. Because it is equal-height hist
+ *    the left point of interval. the List[i1, i2, i3, i4]
+ *    represent [i1, i2], (i2, i3], (i3, i4], (i4, ∞).
+ *    the last element of heights will be 0.
+ *    Because the last interval have no elements
  * enumerate histogram: this type of histogram calculate the count distinct value.
  *    the distinctCounts will be filled by 1.
  *    if the points are [1,1,1,2,2,3]
@@ -308,12 +309,8 @@ case class Histogram(
   val max = if (buckets.size == 0) 0 else buckets.last
   val totalNum : Double = if (buckets.size == 0 || heights.size == 0) 0 else {
     var sum = 0.0
-    if (heights.size == 1) {
-      sum = (buckets.size - 1) * heights(0)
-    } else {
-      for (i <- buckets.indices) {
-        sum += heights(i)
-      }
+    for (i <- buckets.indices) {
+      sum += heights(i)
     }
     sum
   }
@@ -331,49 +328,15 @@ case class Histogram(
       }
     }
 
-    if(heights.size == 1) {
-      height2 = heights(0)
+    if(heights.last == 0) {
       if (index != 0) index = index - 1
-    } else height2 = heights(index)
-
+    }
+    height2 = heights(index)
     (index, buckets(index), distinctCounts(index), height2)
   }
 
   def toColumnStats(avgLen : Long) : ColumnStat = {
     ColumnStat(distinctCount = distinctCounts.sum, min = Some(min), max = Some(max),
       avgLen = avgLen, nullCount = 0, maxLen = avgLen)
-  }
-
-  def equalSum(point: Double) : Double = {
-    val (index, endPoint, distinct, height) = getInterval(point)
-    var sum = 0.0
-    if (endPoint == max) {
-      totalNum
-    } else if (heights.size == 1) {
-      val rateOnBucket = (point - endPoint) / (buckets(index + 1) - endPoint)
-      val heightOnBucket = rateOnBucket * height
-      for (i <- 0 until index) {
-        sum += height
-      }
-      sum += heightOnBucket
-    } else {
-      for (i <- 0 to index) {
-        sum += heights(i)
-      }
-    }
-    sum
-  }
-
-  def lessSum(point: Double) : Double = {
-    if (heights.size == 1) {
-      equalSum(point)
-    } else {
-      val (index, endPoint, distinct, height) = getInterval(point)
-      var sum = 0.0
-      for (i <- 0 until index) {
-        sum += heights(i)
-      }
-      sum
-    }
   }
 }
