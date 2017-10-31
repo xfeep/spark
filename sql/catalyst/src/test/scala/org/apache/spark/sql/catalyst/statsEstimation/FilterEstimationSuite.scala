@@ -534,8 +534,31 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       Filter(InSet(attrInt, Set(3, 4, 5)), childStatsTestPlan(Seq(attrInt), 10L)),
       Seq(attrInt -> ColumnStat(distinctCount = 3, min = Some(3), max = Some(5),
         nullCount = 0, avgLen = 4, maxLen = 4)),
+
       expectedRowCount = 3)
   }
+
+  test("cint IN (3, 4, 5) with histogram") {
+    validateEstimatedStats(
+      Filter(InSet(attrIntHisto, Set(3, 4, 5)), childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 3, min = Some(3), max = Some(5),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrIntHisto -> Histogram(List(3, 4, 5), List(1, 1, 1),
+        List(1, 1, 1))),
+      expectedRowCount = 3)
+  }
+
+  test("cint IN (17, 18, 19, 20, 21, 22) with histogram") {
+    validateEstimatedStats(
+      Filter(InSet(attrIntHisto, Set(17, 18, 19, 20, 21, 22)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 4, min = Some(17), max = Some(20),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrIntHisto -> Histogram(List(17, 18, 19, 20), List(1, 1, 1, 1),
+        List(1, 1, 1, 1))),
+      expectedRowCount = 4)
+  }
+
 
   test("cint NOT IN (3, 4, 5)") {
     validateEstimatedStats(

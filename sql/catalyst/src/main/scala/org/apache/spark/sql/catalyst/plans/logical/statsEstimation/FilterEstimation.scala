@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.plans.logical.statsEstimation
 
 import scala.collection.immutable.HashSet
 import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions._
@@ -403,48 +404,84 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       hSet: Set[Any],
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
 
-    val colStat = colStatsMap(attr)
-    val ndv = colStat.distinctCount
     val dataType = attr.dataType
+    var ndv = 1.0
     var newNdv = ndv
 
-    // use [min, max] to filter the original hSet
-    dataType match {
-      case _: NumericType | BooleanType | DateType | TimestampType =>
-        val statsRange = Range(colStat.min, colStat.max, dataType).asInstanceOf[NumericRange]
-        val validQuerySet = hSet.filter { v =>
-          v != null && statsRange.contains(Literal(v, dataType))
-        }
+    if (histogramMap.contains(attr)) {
+      val histogram: Histogram = histogramMap(attr)
+      ndv = histogram.totalNum
+      // use [min, max] to filter the original hSet
+      val statsRange = Range(Option(histogram.min), Option(histogram.max), dataType)
+        .asInstanceOf[NumericRange]
+      val validQuerySet = hSet.filter { v =>
+        v != null && statsRange.contains(Literal(v, dataType))
+      }
 
-        if (validQuerySet.isEmpty) {
-          return Some(0.0)
-        }
+      if (validQuerySet.isEmpty) {
+        return Some(0.0)
+      }
 
-        val newMax = validQuerySet.maxBy(EstimationUtils.toDecimal(_, dataType))
-        val newMin = validQuerySet.minBy(EstimationUtils.toDecimal(_, dataType))
-        // newNdv should not be greater than the old ndv.  For example, column has only 2 values
-        // 1 and 6. The predicate column IN (1, 2, 3, 4, 5). validQuerySet.size is 5.
-        newNdv = ndv.min(BigInt(validQuerySet.size))
-        if (update) {
-          val newStats = colStat.copy(distinctCount = newNdv, min = Some(newMin),
-            max = Some(newMax), nullCount = 0)
-          colStatsMap.update(attr, newStats)
-        }
+      val querySet: List[Double] =
+        validQuerySet.map(EstimationUtils.toDecimal(_, dataType).toDouble).toList.sorted
+      val NewHeight: ListBuffer[Double] = ListBuffer[Double]()
 
-      // We assume the whole set since there is no min/max information for String/Binary type
-      case StringType | BinaryType =>
-        newNdv = ndv.min(BigInt(hSet.size))
-        if (update) {
-          val newStats = colStat.copy(distinctCount = newNdv, nullCount = 0)
-          colStatsMap.update(attr, newStats)
-        }
+      val newBuckets = querySet.filter(x => {
+        val (index, endPoint, distinct, height) = histogram.getInterval(x)
+        height != 0 && distinct != 0
+      }).map(x => {
+        val (index, endPoint, distinct, height) = histogram.getInterval(x)
+        val newHeight = height / distinct
+        NewHeight += newHeight
+        x
+      })
+      val NewDistincts = List.fill(newBuckets.size)(1L)
+      val newHistogram = Histogram(newBuckets, NewDistincts, NewHeight.toList)
+      newNdv = newHistogram.totalNum
+      if (update) {
+        histogramMap.update(attr, newHistogram)
+      }
+    } else {
+      val colStat = colStatsMap(attr)
+      ndv = colStat.distinctCount.toDouble
+      newNdv = ndv
+      // use [min, max] to filter the original hSet
+      dataType match {
+        case _: NumericType | BooleanType | DateType | TimestampType =>
+          val statsRange = Range(colStat.min, colStat.max, dataType).asInstanceOf[NumericRange]
+          val validQuerySet = hSet.filter { v =>
+            v != null && statsRange.contains(Literal(v, dataType))
+          }
+
+          if (validQuerySet.isEmpty) {
+            return Some(0.0)
+          }
+
+          val newMax = validQuerySet.maxBy(EstimationUtils.toDecimal(_, dataType))
+          val newMin = validQuerySet.minBy(EstimationUtils.toDecimal(_, dataType))
+          // newNdv should not be greater than the old ndv.  For example, column has only 2 values
+          // 1 and 6. The predicate column IN (1, 2, 3, 4, 5). validQuerySet.size is 5.
+          newNdv = ndv.min(validQuerySet.size)
+          if (update) {
+            val newStats = colStat.copy(distinctCount = newNdv.toLong, min = Some(newMin),
+              max = Some(newMax), nullCount = 0)
+            colStatsMap.update(attr, newStats)
+          }
+
+        // We assume the whole set since there is no min/max information for String/Binary type
+        case StringType | BinaryType =>
+          newNdv = ndv.min(hSet.size)
+          if (update) {
+            val newStats = colStat.copy(distinctCount = newNdv.toLong, nullCount = 0)
+            colStatsMap.update(attr, newStats)
+          }
+      }
     }
-
     // return the filter selectivity.  Without advanced statistics such as histograms,
     // we have to assume uniform distribution.
     Some((BigDecimal(newNdv) / BigDecimal(ndv)).min(1.0))

@@ -317,7 +317,7 @@ case class Histogram(
 
   def getInterval(point: Double): (Int, Double, Long, Double) = {
     val size = buckets.size
-    var height2 = 0.0
+    var height = 0.0
     var index = 0
     var flag = true
 
@@ -331,8 +331,8 @@ case class Histogram(
     if(heights.last == 0) {
       if (index != 0) index = index - 1
     }
-    height2 = heights(index)
-    (index, buckets(index), distinctCounts(index), height2)
+    height = heights(index)
+    (index, buckets(index), distinctCounts(index), height)
   }
 
   def toColumnStats(avgLen : Long) : ColumnStat = {
