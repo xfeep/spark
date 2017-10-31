@@ -287,7 +287,7 @@ object ColumnStat extends Logging {
  * we distinct this two types by the last element of heights
  * equal-height histogram: each element of the buckets is
  *    the left point of interval. the List[i1, i2, i3, i4]
- *    represent [i1, i2], (i2, i3], (i3, i4], (i4, ∞).
+ *    represent [i1, i2], (i2, i3], (i3, i4], (i4, infinite).
  *    the last element of heights will be 0.
  *    Because the last interval have no elements
  * enumerate histogram: this type of histogram calculate the count distinct value.
