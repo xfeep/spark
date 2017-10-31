@@ -45,6 +45,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     7.0, 10.0), List(4, 3, 3, 0), List(4, 3, 3, 0))
 
   val attrIntHisto = AttributeReference("cint", IntegerType)()
+  val colStatIntHisto = ColumnStat(distinctCount = 20, min = Some(1), max = Some(20),
+    nullCount = 0, avgLen = 4, maxLen = 4)
   val histogramStatInt = Histogram(List(1.0, 5.5,
     10.5, 15.5, 20.0), List(5, 5, 5, 5, 0), List(5.0, 5, 5, 5, 0))
 
@@ -117,6 +119,11 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val colStatInt3 = ColumnStat(distinctCount = 10, min = Some(30), max = Some(39),
     nullCount = 0, avgLen = 4, maxLen = 4)
 
+  val attrHistoInt3 = AttributeReference("cint3", IntegerType)()
+  val histogramInt3 = Histogram(List(30.0, 33.0,
+    36.0, 39.0), List(4, 3, 3, 0), List(4, 3, 3, 0))
+
+
   // column cint4 has values in the range from 1 to 10
   // distinctCount:10, min:1, max:10, nullCount:0, avgLen:4, maxLen:4
   // This column is created to test complete overlap
@@ -133,12 +140,15 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     attrString -> colStatString,
     attrInt2 -> colStatInt2,
     attrInt3 -> colStatInt3,
-    attrInt4 -> colStatInt4
+    attrInt4 -> colStatInt4,
+    attrHistoInt -> colStatInt,
+    attrIntHisto -> colStatIntHisto
   ))
 
   val histograms = AttributeMap(Seq(
     attrHistoInt -> histogramInt1,
     attrHistoInt2 -> histogramInt2,
+    attrHistoInt3 -> histogramInt3,
     attrIntHisto -> histogramStatInt,
     attrDate2 -> histogramStatDate,
     attrDouble2 -> histogramStatDouble,
@@ -185,6 +195,14 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     val condition = And(LessThan(attrInt, Literal(3)), Literal(null, IntegerType))
     validateEstimatedStats(
       Filter(condition, childStatsTestPlan(Seq(attrInt), 10L)),
+      Nil,
+      expectedRowCount = 0)
+  }
+
+  test("cint < 3 AND null with histogram") {
+    val condition = And(LessThan(attrHistoInt, Literal(3)), Literal(null, IntegerType))
+    validateEstimatedStats(
+      Filter(condition, childStatsTestPlan(Seq(attrHistoInt), 10L)),
       Nil,
       expectedRowCount = 0)
   }
@@ -559,6 +577,15 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 4)
   }
 
+  test("cint IN (21, 22) with histogram") {
+    validateEstimatedStats(
+      Filter(InSet(attrIntHisto, Set(21, 22)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Nil,
+      Nil,
+      expectedRowCount = 0)
+  }
+
 
   test("cint NOT IN (3, 4, 5)") {
     validateEstimatedStats(
@@ -591,7 +618,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 5)
   }
 
-  test("cdate = cast('2017-01-02' AS DATE)") {
+  test("cdate = cast('2017-01-02' AS DATE) with histogram") {
     val d20170102 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-08"))
     validateEstimatedStats(
       Filter(EqualTo(attrDate2, Literal(d20170102, DateType)),
@@ -611,6 +638,19 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
         nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 3)
   }
+
+  test("cdate < cast('2017-01-03' AS DATE) with histogram") {
+    val d20170103 = DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-03"))
+    validateEstimatedStats(
+      Filter(LessThan(attrDate2, Literal(d20170103, DateType)),
+        childStatsTestPlan(Seq(attrDate2), 20L)),
+      Seq(attrDate2 -> ColumnStat(distinctCount = 3, min = Some(dMin), max = Some(d20170103),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrDate2 -> Histogram(List(DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-01")),
+        DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-03"))), List(3, 0), List(2.5, 0))),
+      expectedRowCount = 3)
+  }
+
 
   test("""cdate IN ( cast('2017-01-03' AS DATE),
       cast('2017-01-04' AS DATE), cast('2017-01-05' AS DATE) )""") {
@@ -816,6 +856,16 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     // no records qualify due to no overlap
     validateEstimatedStats(
       Filter(EqualTo(attrInt, attrInt3), childStatsTestPlan(Seq(attrInt, attrInt3), 10L)),
+      Nil, // set to empty
+      expectedRowCount = 0)
+  }
+
+
+  test("cint = cint3 with histogram") {
+    // no records qualify due to no overlap
+    validateEstimatedStats(
+      Filter(EqualTo(attrHistoInt, attrHistoInt3),
+        childStatsTestPlan(Seq(attrHistoInt, attrHistoInt3), 10L)),
       Nil, // set to empty
       expectedRowCount = 0)
   }
