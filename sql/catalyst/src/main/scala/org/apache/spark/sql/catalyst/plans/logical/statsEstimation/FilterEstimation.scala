@@ -789,11 +789,11 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attrRight: Attribute,
       update: Boolean): Option[BigDecimal] = {
 
-    if (!colStatsMap.contains(attrLeft)) {
+    if (!colStatsMap.contains(attrLeft) && !histogramMap.contains(attrLeft)) {
       logDebug("[CBO] No statistics for " + attrLeft)
       return None
     }
-    if (!colStatsMap.contains(attrRight)) {
+    if (!colStatsMap.contains(attrRight) && !histogramMap.contains(attrRight)) {
       logDebug("[CBO] No statistics for " + attrRight)
       return None
     }
@@ -806,14 +806,40 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
         return None
       case _ =>
     }
+    var colStatLeft : ColumnStat = null
+    if (histogramMap.contains(attrLeft)) {
+      var avglen = 4
+      attrLeft.dataType match {
+        case _: DecimalType | DoubleType | LongType => avglen = 8
+        case _: FloatType | IntegerType => avglen = 4
+        case _: BinaryType => avglen = 1
+        case _: DateType => avglen = 4
+        case _ => avglen = 4
+      }
+      colStatLeft = histogramMap(attrLeft).toColumnStats(avglen)
+    } else {
+      colStatLeft = colStatsMap(attrLeft)
+    }
 
-    val colStatLeft = colStatsMap(attrLeft)
     val statsRangeLeft = Range(colStatLeft.min, colStatLeft.max, attrLeft.dataType)
       .asInstanceOf[NumericRange]
     val maxLeft = statsRangeLeft.max
     val minLeft = statsRangeLeft.min
 
-    val colStatRight = colStatsMap(attrRight)
+    var colStatRight : ColumnStat = null
+    if (histogramMap.contains(attrRight)) {
+      var avglen = 4
+      attrRight.dataType match {
+        case _: DecimalType | DoubleType | LongType => avglen = 8
+        case _: FloatType | IntegerType => avglen = 4
+        case _: BinaryType => avglen = 1
+        case _: DateType => avglen = 4
+        case _ => avglen = 4
+      }
+      colStatRight = histogramMap(attrRight).toColumnStats(avglen)
+    } else {
+      colStatRight = colStatsMap(attrRight)
+    }
     val statsRangeRight = Range(colStatRight.min, colStatRight.max, attrRight.dataType)
       .asInstanceOf[NumericRange]
     val maxRight = statsRangeRight.max
@@ -1023,12 +1049,12 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
    */
   def outputColumnStats(rowsBeforeFilter: BigInt, rowsAfterFilter: BigInt)
     : AttributeMap[ColumnStat] = {
-    val ColumnStatUpdateByHistogram =
+    val ColumnStatUpdateByHistogramOrHimself =
       updatedMap.map( x => {
         x._2._1 -> x._2._2
       })
     val newColumnStats = originalMap.filter(x => {
-      !ColumnStatUpdateByHistogram.contains(x._1)
+      !ColumnStatUpdateByHistogramOrHimself.contains(x._1)
     }).map { case (attr, oriColStat) =>
       // Update ndv based on the overall filter selectivity: scale down ndv if the number of rows
       // decreases; otherwise keep it unchanged.
@@ -1037,7 +1063,7 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
       val colStat = updatedMap.get(attr.exprId).map(_._2).getOrElse(oriColStat)
       attr -> colStat.copy(distinctCount = newNdv)
     }
-    AttributeMap((newColumnStats ++ ColumnStatUpdateByHistogram).toSeq)
+    AttributeMap((newColumnStats ++ ColumnStatUpdateByHistogramOrHimself).toSeq)
   }
 }
 
@@ -1067,10 +1093,12 @@ case class HistogramMap(originalMap: AttributeMap[Histogram]) {
       if (updatedMap.contains(attr.exprId)) {
         cm.update(attr, updatedMap.get(attr.exprId).get._2.toColumnStats(avglen))
       } else {
-        val stat = oriHist.toColumnStats(avglen)
-        val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
-          newNumRows = rowsAfterFilter, oldNdv = stat.distinctCount)
-        cm.update(attr, stat.copy(distinctCount = newNdv))
+        if (!cm.contains(attr)) {
+          val stat = oriHist.toColumnStats(avglen)
+          val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
+            newNumRows = rowsAfterFilter, oldNdv = stat.distinctCount)
+          cm.update(attr, stat.copy(distinctCount = newNdv))
+        }
       }
     }
   }

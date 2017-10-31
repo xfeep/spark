@@ -40,7 +40,11 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val colStatInt = ColumnStat(distinctCount = 10, min = Some(1), max = Some(10),
     nullCount = 0, avgLen = 4, maxLen = 4)
 
-  val attrInthisto = AttributeReference("cint", IntegerType)()
+  val attrHistoInt = AttributeReference("cint", IntegerType)()
+  val histogramInt1 = Histogram(List(1.0, 3.0,
+    7.0, 10.0), List(4, 3, 3, 0), List(4, 3, 3, 0))
+
+  val attrIntHisto = AttributeReference("cint", IntegerType)()
   val histogramStatInt = Histogram(List(1.0, 5.5,
     10.5, 15.5, 20.0), List(5, 5, 5, 5, 0), List(5.0, 5, 5, 5, 0))
 
@@ -102,6 +106,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val colStatInt2 = ColumnStat(distinctCount = 10, min = Some(7), max = Some(16),
     nullCount = 0, avgLen = 4, maxLen = 4)
 
+  val attrHistoInt2 = AttributeReference("cint", IntegerType)()
+  val histogramInt2 = Histogram(List(7.0, 10.0,
+    13.0, 16.0), List(4, 3, 3, 0), List(4, 3, 3, 0))
+
   // column cint3 has values: 30, 31, 32, 33, 34, 35, 36, 37, 38, 39
   // Hence, distinctCount:10, min:30, max:39, nullCount:0, avgLen:4, maxLen:4
   // This column is created to test "cint = cint3 without overlap at all.
@@ -129,7 +137,9 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   ))
 
   val histograms = AttributeMap(Seq(
-    attrInthisto -> histogramStatInt,
+    attrHistoInt -> histogramInt1,
+    attrHistoInt2 -> histogramInt2,
+    attrIntHisto -> histogramStatInt,
     attrDate2 -> histogramStatDate,
     attrDouble2 -> histogramStatDouble,
     attrDouble3 -> histogramStatDouble2,
@@ -221,10 +231,10 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
 
   test("cint = 4 with histogram") {
     validateEstimatedStats(
-      Filter(EqualTo(attrInthisto, Literal(4)), childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
+      Filter(EqualTo(attrIntHisto, Literal(4)), childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 1, min = Some(4), max = Some(4),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(4), List(1), List(1))),
+      Seq(attrIntHisto -> Histogram(List(4), List(1), List(1))),
       expectedRowCount = 1)
   }
 
@@ -292,73 +302,73 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   }
   test("cint < 1.1") {
     validateEstimatedStats(
-      Filter(LessThan(attrInthisto, Literal(1.1)), childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 1, min = Some(1), max = Some(1.1),
+      Filter(LessThan(attrIntHisto, Literal(1.1)), childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 1, min = Some(1), max = Some(1.1),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(1, 1.1), List(1, 0), List(0.1111111111111112, 0))),
+      Seq(attrIntHisto -> Histogram(List(1, 1.1), List(1, 0), List(0.1111111111111112, 0))),
       expectedRowCount = 1)
   }
 
   test("cint2 < 9 with histogram") {
     validateEstimatedStats(
-      Filter(LessThan(attrInthisto, Literal(9)),
-        childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 9, min = Some(1), max = Some(9),
+      Filter(LessThan(attrIntHisto, Literal(9)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 9, min = Some(1), max = Some(9),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(1, 5.5, 9.0), List(5, 4, 0), List(5, 3.5, 0))),
+      Seq(attrIntHisto -> Histogram(List(1, 5.5, 9.0), List(5, 4, 0), List(5, 3.5, 0))),
       expectedRowCount = 9)
   }
 
   test("cint2 < 20 with histogram") {
     validateEstimatedStats(
-      Filter(LessThan(attrInthisto, Literal(20)),
-        childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 19, min = Some(1), max = Some(20),
+      Filter(LessThan(attrIntHisto, Literal(20)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 19, min = Some(1), max = Some(20),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(1, 5.5, 10.5, 15.5, 20),
+      Seq(attrIntHisto -> Histogram(List(1, 5.5, 10.5, 15.5, 20),
         List(5, 5, 5, 4, 0), List(5, 5, 5, 4, 0))),
       expectedRowCount = 19)
   }
 
   test("cint2 <= 9 with histogram") {
     validateEstimatedStats(
-      Filter(LessThanOrEqual(attrInthisto, Literal(9)),
-        childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 9, min = Some(1), max = Some(9),
+      Filter(LessThanOrEqual(attrIntHisto, Literal(9)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 9, min = Some(1), max = Some(9),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(1, 5.5, 9.0), List(5, 4, 0), List(5, 3.5, 0))),
+      Seq(attrIntHisto -> Histogram(List(1, 5.5, 9.0), List(5, 4, 0), List(5, 3.5, 0))),
       expectedRowCount = 9)
   }
 
   test("cint2 <= 20 with histogram") {
     validateEstimatedStats(
-      Filter(LessThanOrEqual(attrInthisto, Literal(20)),
-        childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 20, min = Some(1), max = Some(20),
+      Filter(LessThanOrEqual(attrIntHisto, Literal(20)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 20, min = Some(1), max = Some(20),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(1, 5.5, 10.5, 15.5, 20),
+      Seq(attrIntHisto -> Histogram(List(1, 5.5, 10.5, 15.5, 20),
         List(5, 5, 5, 5, 0), List(5, 5, 5, 5, 0))),
       expectedRowCount = 20)
   }
 
   test("cint2 >= 4 with histogram") {
     validateEstimatedStats(
-      Filter(GreaterThanOrEqual(attrInthisto, Literal(4)),
-        childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 17, min = Some(4), max = Some(20),
+      Filter(GreaterThanOrEqual(attrIntHisto, Literal(4)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 17, min = Some(4), max = Some(20),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(4, 5.5, 10.5, 15.5, 20),
+      Seq(attrIntHisto -> Histogram(List(4, 5.5, 10.5, 15.5, 20),
         List(2, 5, 5, 5, 0), List(1.666666666666667, 5, 5, 5, 0))),
       expectedRowCount = 17)
   }
 
   test("cint2 > 4 with histogram") {
     validateEstimatedStats(
-      Filter(GreaterThan(attrInthisto, Literal(4)),
-        childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 17, min = Some(4), max = Some(20),
+      Filter(GreaterThan(attrIntHisto, Literal(4)),
+        childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 17, min = Some(4), max = Some(20),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(4, 5.5, 10.5, 15.5, 20),
+      Seq(attrIntHisto -> Histogram(List(4, 5.5, 10.5, 15.5, 20),
         List(2, 5, 5, 5, 0), List(1.666666666666667, 5, 5, 5, 0))),
       expectedRowCount = 17)
   }
@@ -440,37 +450,37 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   }
 
   test("cint > 3 AND cint <= 6 with histogram") {
-    val condition = And(GreaterThan(attrInthisto, Literal(3)),
-      LessThanOrEqual(attrInthisto, Literal(6)))
+    val condition = And(GreaterThan(attrIntHisto, Literal(3)),
+      LessThanOrEqual(attrIntHisto, Literal(6)))
     validateEstimatedStats(
-      Filter(condition, childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 4, min = Some(3), max = Some(6),
+      Filter(condition, childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 4, min = Some(3), max = Some(6),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(3, 5.5, 6), List(3, 1, 0),
+      Seq(attrIntHisto -> Histogram(List(3, 5.5, 6), List(3, 1, 0),
         List(2.7777777777777777, 0.5, 0))),
       expectedRowCount = 4)
   }
 
   test("cint <= 6 AND cint > 3 with histogram") {
-    val condition = And(LessThanOrEqual(attrInthisto, Literal(6)),
-      GreaterThan(attrInthisto, Literal(3)))
+    val condition = And(LessThanOrEqual(attrIntHisto, Literal(6)),
+      GreaterThan(attrIntHisto, Literal(3)))
     validateEstimatedStats(
-      Filter(condition, childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 4, min = Some(3), max = Some(6),
+      Filter(condition, childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 4, min = Some(3), max = Some(6),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(3, 5.5, 6), List(3, 1, 0),
+      Seq(attrIntHisto -> Histogram(List(3, 5.5, 6), List(3, 1, 0),
         List(2.7777777777777777, 0.5, 0))),
       expectedRowCount = 4)
   }
 
   test("cint <= 10.5 AND cint > 3 with histogram") {
-    val condition = And(LessThanOrEqual(attrInthisto, Literal(10.5)),
-      GreaterThan(attrInthisto, Literal(3)))
+    val condition = And(LessThanOrEqual(attrIntHisto, Literal(10.5)),
+      GreaterThan(attrIntHisto, Literal(3)))
     validateEstimatedStats(
-      Filter(condition, childStatsTestPlan(Seq(attrInthisto), 20L)),
-      Seq(attrInthisto -> ColumnStat(distinctCount = 8, min = Some(3), max = Some(10.5),
+      Filter(condition, childStatsTestPlan(Seq(attrIntHisto), 20L)),
+      Seq(attrIntHisto -> ColumnStat(distinctCount = 8, min = Some(3), max = Some(10.5),
         nullCount = 0, avgLen = 4, maxLen = 4)),
-      Seq(attrInthisto -> Histogram(List(3, 5.5, 10.5), List(3, 5, 0),
+      Seq(attrIntHisto -> Histogram(List(3, 5.5, 10.5), List(3, 5, 0),
         List(2.7777777777777777, 5, 0))),
       expectedRowCount = 8)
   }
@@ -697,6 +707,18 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 4)
   }
 
+  test("cint = cint2 with histogram") {
+    // partial overlap case
+    validateEstimatedStats(
+      Filter(EqualTo(attrHistoInt, attrHistoInt2),
+        childStatsTestPlan(Seq(attrHistoInt, attrHistoInt2), 10L)),
+      Seq(attrHistoInt -> ColumnStat(distinctCount = 4, min = Some(7), max = Some(10),
+        nullCount = 0, avgLen = 4, maxLen = 4),
+        attrHistoInt2 -> ColumnStat(distinctCount = 4, min = Some(7), max = Some(10),
+          nullCount = 0, avgLen = 4, maxLen = 4)),
+      expectedRowCount = 4)
+  }
+
   test("cint > cint2") {
     // partial overlap case
     validateEstimatedStats(
@@ -708,6 +730,19 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 4)
   }
 
+  test("cint > cint2 with histogram") {
+    // partial overlap case
+    validateEstimatedStats(
+      Filter(GreaterThan(attrHistoInt, attrHistoInt2),
+        childStatsTestPlan(Seq(attrHistoInt, attrHistoInt2), 10L)),
+      Seq(attrHistoInt -> ColumnStat(distinctCount = 4, min = Some(7), max = Some(10),
+        nullCount = 0, avgLen = 4, maxLen = 4),
+        attrHistoInt2 -> ColumnStat(distinctCount = 4, min = Some(7), max = Some(10),
+          nullCount = 0, avgLen = 4, maxLen = 4)),
+      expectedRowCount = 4)
+  }
+
+
   test("cint < cint2") {
     // partial overlap case
     validateEstimatedStats(
@@ -718,6 +753,19 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
           nullCount = 0, avgLen = 4, maxLen = 4)),
       expectedRowCount = 4)
   }
+
+  test("cint < cint2 with histogram") {
+    // partial overlap case
+    validateEstimatedStats(
+      Filter(LessThan(attrHistoInt, attrHistoInt2),
+        childStatsTestPlan(Seq(attrHistoInt, attrHistoInt2), 10L)),
+      Seq(attrHistoInt -> ColumnStat(distinctCount = 4, min = Some(1), max = Some(10),
+        nullCount = 0, avgLen = 4, maxLen = 4),
+        attrHistoInt2 -> ColumnStat(distinctCount = 4, min = Some(7), max = Some(16),
+          nullCount = 0, avgLen = 4, maxLen = 4)),
+      expectedRowCount = 4)
+  }
+
 
   test("cint = cint4") {
     // complete overlap case
