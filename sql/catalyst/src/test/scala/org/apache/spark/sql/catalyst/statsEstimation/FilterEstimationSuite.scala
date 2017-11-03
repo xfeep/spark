@@ -108,7 +108,7 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
   val colStatInt2 = ColumnStat(distinctCount = 10, min = Some(7), max = Some(16),
     nullCount = 0, avgLen = 4, maxLen = 4)
 
-  val attrHistoInt2 = AttributeReference("cint", IntegerType)()
+  val attrHistoInt2 = AttributeReference("cint2", IntegerType)()
   val histogramInt2 = Histogram(List(7.0, 10.0,
     13.0, 16.0), List(4, 3, 3, 0), List(4, 3, 3, 0))
 
@@ -440,11 +440,27 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       expectedRowCount = 0)
   }
 
+  test("cint2 IS NULL with histogram") {
+    validateEstimatedStats(
+      Filter(IsNull(attrHistoInt2), childStatsTestPlan(Seq(attrHistoInt2), 10L)),
+      Nil,
+      expectedRowCount = 0)
+  }
+
   test("cint IS NOT NULL") {
     validateEstimatedStats(
       Filter(IsNotNull(attrInt), childStatsTestPlan(Seq(attrInt), 10L)),
       Seq(attrInt -> ColumnStat(distinctCount = 10, min = Some(1), max = Some(10),
         nullCount = 0, avgLen = 4, maxLen = 4)),
+      expectedRowCount = 10)
+  }
+
+  test("cint2 IS NOT NULL with histogram without columnStats") {
+    validateEstimatedStats(
+      Filter(IsNotNull(attrHistoInt2), childStatsTestPlan(Seq(attrHistoInt2), 10L)),
+      Seq(attrHistoInt2 -> ColumnStat(distinctCount = 10, min = Some(7), max = Some(16),
+        nullCount = 0, avgLen = 4, maxLen = 4)),
+      Seq(attrHistoInt2 -> histogramInt2),
       expectedRowCount = 10)
   }
 
@@ -457,6 +473,17 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       Nil,
       expectedRowCount = 0)
   }
+
+  test("cint IS NOT NULL && null with histogram") {
+    // 'cint < null' will be optimized to 'cint IS NOT NULL && null'.
+    // More similar cases can be found in the Optimizer NullPropagation.
+    val condition = And(IsNotNull(attrHistoInt2), Literal(null, IntegerType))
+    validateEstimatedStats(
+      Filter(condition, childStatsTestPlan(Seq(attrHistoInt2), 10L)),
+      Nil,
+      expectedRowCount = 0)
+  }
+
 
   test("cint > 3 AND cint <= 6") {
     val condition = And(GreaterThan(attrInt, Literal(3)), LessThanOrEqual(attrInt, Literal(6)))

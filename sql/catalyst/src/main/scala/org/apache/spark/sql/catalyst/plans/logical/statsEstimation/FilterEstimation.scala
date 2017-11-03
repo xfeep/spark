@@ -98,6 +98,7 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       case And(cond1, cond2) =>
         val percent1 = calculateFilterSelectivity(cond1, update).getOrElse(BigDecimal(1.0))
         val percent2 = calculateFilterSelectivity(cond2, update).getOrElse(BigDecimal(1.0))
+        // Some(Math.pow((percent1 * percent2).toDouble, 0.5))
         Some(percent1 * percent2)
 
       case Or(cond1, cond2) =>
@@ -239,25 +240,47 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       isNull: Boolean,
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
-    val colStat = colStatsMap(attr)
-    val rowCountValue = childStats.rowCount.get
-    val nullPercent: BigDecimal = if (rowCountValue == 0) {
-      0
-    } else {
-      BigDecimal(colStat.nullCount) / BigDecimal(rowCountValue)
-    }
 
-    if (update) {
-      val newStats = if (isNull) {
-        colStat.copy(distinctCount = 0, min = None, max = None)
+    val rowCountValue = childStats.rowCount.get
+    var nullPercent: BigDecimal = 0
+    if (histogramMap.contains(attr)) {
+      val histogram = histogramMap(attr)
+      nullPercent = if (rowCountValue == 0) {
+        0
       } else {
-        colStat.copy(nullCount = 0)
+         1 - BigDecimal(histogram.totalNum) / BigDecimal(rowCountValue)
       }
-      colStatsMap.update(attr, newStats)
+
+      if (update) {
+        if (isNull) {
+          val newStats = ColumnStat(distinctCount = 0, min = None, max = None,
+            nullCount = 0, avgLen = 4, maxLen = 4)
+          colStatsMap.update(attr, newStats)
+        } else {
+          histogramMap.update(attr, histogram)
+        }
+
+      }
+    } else {
+      val colStat = colStatsMap(attr)
+      nullPercent = if (rowCountValue == 0) {
+        0
+      } else {
+        BigDecimal(colStat.nullCount) / BigDecimal(rowCountValue)
+      }
+
+      if (update) {
+        val newStats = if (isNull) {
+          colStat.copy(distinctCount = 0, min = None, max = None)
+        } else {
+          colStat.copy(nullCount = 0)
+        }
+        colStatsMap.update(attr, newStats)
+      }
     }
 
     val percent = if (isNull) {

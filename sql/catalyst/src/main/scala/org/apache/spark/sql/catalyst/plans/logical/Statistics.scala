@@ -308,11 +308,7 @@ case class Histogram(
   val min = if (buckets.size == 0) 0 else buckets(0)
   val max = if (buckets.size == 0) 0 else buckets.last
   val totalNum : Double = if (buckets.size == 0 || heights.size == 0) 0 else {
-    var sum = 0.0
-    for (i <- buckets.indices) {
-      sum += heights(i)
-    }
-    sum
+    heights.sum
   }
 
   def getInterval(point: Double): (Int, Double, Long, Double) = {
