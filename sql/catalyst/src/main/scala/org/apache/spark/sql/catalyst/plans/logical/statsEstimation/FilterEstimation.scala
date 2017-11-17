@@ -349,15 +349,17 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
 
     if(histogramMap.contains(attr)) {
       val histogram: Histogram = histogramMap(attr)
-      val statsRange = Range(Option(histogram.min), Option(histogram.max), attr.dataType)
-      if (statsRange.contains(literal)) {
+      val value = if (literal.dataType == StringType) {
+        EstimationUtils.StringToDouble(literal.value.toString)
+      } else literal.value.toString.toDouble
+      if (value >= histogram.min && value <= histogram.max) {
         var res = 0.0
         val (index, endpoint, distinctCount, height) = histogram.getInterval(
           EstimationUtils.toDecimal(literal.value, literal.dataType).toDouble)
         if(distinctCount != 0) {
           res = (height / distinctCount) / histogram.totalNum
         }
-        val newHistogram = Histogram(List(literal.value.toString.toDouble), List(1),
+        val newHistogram = Histogram(List(value), List(1),
           List(height / distinctCount))
         histogramMap.update(attr, newHistogram)
         Some(res)
@@ -440,10 +442,9 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       val histogram: Histogram = histogramMap(attr)
       ndv = histogram.totalNum
       // use [min, max] to filter the original hSet
-      val statsRange = Range(Option(histogram.min), Option(histogram.max), dataType)
-        .asInstanceOf[NumericRange]
       val validQuerySet = hSet.filter { v =>
-        v != null && statsRange.contains(Literal(v, dataType))
+        v != null && EstimationUtils.toDecimal(v, dataType).toDouble >= histogram.min &&
+          EstimationUtils.toDecimal(v, dataType).toDouble <= histogram.max
       }
 
       if (validQuerySet.isEmpty) {
@@ -753,7 +754,10 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       // determine the overlapping degree between predicate range and column's range
       val numericLiteral = if (literal.dataType == BooleanType) {
         if (literal.value.asInstanceOf[Boolean]) BigDecimal(1) else BigDecimal(0)
-      } else {
+      } else if (literal.dataType == StringType) {
+        BigDecimal(EstimationUtils.StringToDouble(literal.value.toString))
+      }
+      else {
         BigDecimal(literal.value.toString)
       }
       val (noOverlap: Boolean, completeOverlap: Boolean) = op match {
@@ -1141,14 +1145,14 @@ case class HistogramMap(originalMap: AttributeMap[Histogram]) {
                         rowsBeforeFilter: BigInt,
                         rowsAfterFilter: BigInt) : Unit = {
     originalMap.foreach { case (attr, oriHist) =>
-      var avglen = 4
-      attr.dataType match {
-        case _: DecimalType | DoubleType | LongType => avglen = 8
-        case _: FloatType | IntegerType => avglen = 4
-        case _: BinaryType => avglen = 1
-        case _: DateType => avglen = 4
-        case _ => avglen = 4
-        // TODO : need to add more type
+      val avglen = attr.dataType match {
+        case _: DecimalType => 16
+        case _: DoubleType | LongType => 8
+        case _: FloatType | IntegerType => 4
+        case _: BinaryType => 1
+        case _: DateType => 4
+        case _: StringType => 17
+        case _ => 4
       }
       if (updatedMap.contains(attr.exprId)) {
         cm.update(attr, updatedMap.get(attr.exprId).get._2.toColumnStats(avglen))

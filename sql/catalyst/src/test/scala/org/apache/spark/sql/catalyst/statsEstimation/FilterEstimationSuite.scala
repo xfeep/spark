@@ -75,6 +75,12 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     DateTimeUtils.fromJavaDate(Date.valueOf("2017-01-08"))),
     List(5, 1, 1, 1, 0), List(5.0, 5, 5, 5, 0))
 
+  // histogram string
+  val attrString2 = AttributeReference("cstring", StringType)()
+  val histogramStatString = Histogram(List(StringToDouble("aaa"),
+    StringToDouble("bbb"), StringToDouble("ccc")),
+    List(1, 1, 1), List(1, 2, 3))
+
   // column cdecimal has 4 values from 0.20 through 0.80 at increment of 0.20.
   val decMin = Decimal("0.200000000000000000")
   val decMax = Decimal("0.800000000000000000")
@@ -153,7 +159,8 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
     attrDate2 -> histogramStatDate,
     attrDouble2 -> histogramStatDouble,
     attrDouble3 -> histogramStatDouble2,
-    attrIntHisto2 -> histogramStatInt2
+    attrIntHisto2 -> histogramStatInt2,
+    attrString2 -> histogramStatString
   ))
 
   test("true") {
@@ -270,6 +277,19 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
       Filter(EqualTo(attrInt, Literal(0)), childStatsTestPlan(Seq(attrInt), 10L)),
       Nil,
       expectedRowCount = 0)
+  }
+
+  test("cString = aaa") {
+    // This is an out-of-range case since 0 is outside the range [min, max]
+    validateEstimatedStats(
+      Filter(EqualTo(attrString2, Literal("aaa")), childStatsTestPlan(Seq(attrString2), 6L)),
+      Seq(attrString2 -> ColumnStat(distinctCount = 1,
+        min = None,
+        max = None,
+        nullCount = 0, avgLen = 17, maxLen = 17)),
+      Seq(attrString2 -> Histogram(List(StringToDouble("aaa")),
+        List(1), List(1))),
+      expectedRowCount = 1)
   }
 
   test("cint < 3") {
@@ -581,6 +601,19 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
         nullCount = 0, avgLen = 4, maxLen = 4)),
 
       expectedRowCount = 3)
+  }
+
+  test("cString = in('aaa', 'ccc')") {
+    // This is an out-of-range case since 0 is outside the range [min, max]
+    validateEstimatedStats(
+      Filter(InSet(attrString2, Set("aaa", "ccc")), childStatsTestPlan(Seq(attrString2), 6L)),
+      Seq(attrString2 -> ColumnStat(distinctCount = 2,
+        min = None,
+        max = None,
+        nullCount = 0, avgLen = 17, maxLen = 17)),
+      Seq(attrString2 -> Histogram(List(StringToDouble("aaa"), StringToDouble("ccc")),
+        List(1, 1), List(1, 3))),
+      expectedRowCount = 4)
   }
 
   test("cint IN (3, 4, 5) with histogram") {
@@ -990,11 +1023,11 @@ class FilterEstimationSuite extends StatsEstimationTestBase {
         assert(expectedColStats.size == filterStats.attributeStats.size)
         assert(expectedHistogram.size == filterStats.histograms.size)
         expectedColStats.foreach { kv =>
-          val filterColumnStat = filterStats.attributeStats.get(kv._1).get
+          val filterColumnStat = filterStats.attributeStats.get(kv._1).getOrElse(0)
           assert(filterColumnStat == kv._2)
         }
         expectedHistogram.foreach{ kv =>
-          val filterHistogram = filterStats.histograms.get(kv._1).get
+          val filterHistogram = filterStats.histograms.get(kv._1).getOrElse(0)
           assert(filterHistogram == kv._2)
         }
       }

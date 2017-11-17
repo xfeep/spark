@@ -283,22 +283,21 @@ object ColumnStat extends Logging {
 
 /**
  * At present sitiuation; We support two types of histogram
- * One is equal-height histogram and the other is enumerate hisogram
+ * One is equal-height histogram and the other is enumerate histogram
  * we distinct this two types by the last element of heights
- * equal-height histogram: each element of the buckets is
+ * height-balanced(HB) histogram: each element of the buckets is
  *    the left point of interval. the List[i1, i2, i3, i4]
  *    represent [i1, i2], (i2, i3], (i3, i4], (i4, infinite).
  *    the last element of heights will be 0.
  *    Because the last interval have no elements
- * enumerate histogram: this type of histogram calculate the count distinct value.
- *    the distinctCounts will be filled by 1.
+ * frequency(FQ) histogram: distinctCounts will be filled by 1.
  *    if the points are [1,1,1,2,2,3]
  *    the histogram is bucket:[1,2,3] distinctCount[1,1,1] heights[3,2,1]
- * @param buckets equal-height: the interval of each bucket
- *                enumerate: the distinct value
+ * @param buckets HB: the interval of each bucket
+ *                FQ: the distinct value
  * @param distinctCounts the distinctCount of each bucket
- * @param heights equal-height: the total point of each bucket
- *                enumerate: the total point of distinct value
+ * @param heights HB: the total point of each bucket
+ *                FQ: the total point of distinct value
  */
 case class Histogram(
                       buckets: List[Double],
@@ -332,7 +331,9 @@ case class Histogram(
   }
 
   def toColumnStats(avgLen : Long) : ColumnStat = {
-    ColumnStat(distinctCount = distinctCounts.sum, min = Some(min), max = Some(max),
+    if (avgLen == 17) ColumnStat(distinctCount = distinctCounts.sum, min = None, max = None,
+        avgLen = avgLen, nullCount = 0, maxLen = avgLen)
+    else ColumnStat(distinctCount = distinctCounts.sum, min = Some(min), max = Some(max),
       avgLen = avgLen, nullCount = 0, maxLen = avgLen)
   }
 }
