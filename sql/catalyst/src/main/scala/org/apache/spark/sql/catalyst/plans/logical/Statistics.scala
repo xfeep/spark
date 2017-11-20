@@ -52,6 +52,7 @@ case class Statistics(
     sizeInBytes: BigInt,
     rowCount: Option[BigInt] = None,
     attributeStats: AttributeMap[ColumnStat] = AttributeMap(Nil),
+    histograms: AttributeMap[Histogram] = AttributeMap(Nil),
     hints: HintInfo = HintInfo()) {
 
   override def toString: String = "Statistics(" + simpleString + ")"
@@ -278,4 +279,61 @@ object ColumnStat extends Logging {
     )
   }
 
+}
+
+/**
+ * At present sitiuation; We support two types of histogram
+ * One is equal-height histogram and the other is enumerate histogram
+ * we distinct this two types by the last element of heights
+ * height-balanced(HB) histogram: each element of the buckets is
+ *    the left point of interval. the List[i1, i2, i3, i4]
+ *    represent [i1, i2], (i2, i3], (i3, i4], (i4, infinite).
+ *    the last element of heights will be 0.
+ *    Because the last interval have no elements
+ * frequency(FQ) histogram: distinctCounts will be filled by 1.
+ *    if the points are [1,1,1,2,2,3]
+ *    the histogram is bucket:[1,2,3] distinctCount[1,1,1] heights[3,2,1]
+ * @param buckets HB: the interval of each bucket
+ *                FQ: the distinct value
+ * @param distinctCounts the distinctCount of each bucket
+ * @param heights HB: the total point of each bucket
+ *                FQ: the total point of distinct value
+ */
+case class Histogram(
+                      buckets: List[Double],
+                      distinctCounts: List[Long],
+                      heights: List[Double]
+                    ) {
+  val min = if (buckets.size == 0) 0 else buckets(0)
+  val max = if (buckets.size == 0) 0 else buckets.last
+  val totalNum : Double = if (buckets.size == 0 || heights.size == 0) 0 else {
+    heights.sum
+  }
+
+  def getInterval(point: Double): (Int, Double, Long, Double) = {
+    val size = buckets.size
+    var height = 0.0
+    var index = 0
+    var flag = true
+
+    for (i <- buckets.indices if flag) {
+      if (point <= buckets(i)) {
+        index = i
+        flag = false
+      }
+    }
+
+    if(heights.last == 0) {
+      if (index != 0) index = index - 1
+    }
+    height = heights(index)
+    (index, buckets(index), distinctCounts(index), height)
+  }
+
+  def toColumnStats(avgLen : Long) : ColumnStat = {
+    if (avgLen == 17) ColumnStat(distinctCount = distinctCounts.sum, min = None, max = None,
+        avgLen = avgLen, nullCount = 0, maxLen = avgLen)
+    else ColumnStat(distinctCount = distinctCounts.sum, min = Some(min), max = Some(max),
+      avgLen = avgLen, nullCount = 0, maxLen = avgLen)
+  }
 }

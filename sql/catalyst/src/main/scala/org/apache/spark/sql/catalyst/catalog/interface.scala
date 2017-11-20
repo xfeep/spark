@@ -352,7 +352,8 @@ object CatalogTable {
 case class CatalogStatistics(
     sizeInBytes: BigInt,
     rowCount: Option[BigInt] = None,
-    colStats: Map[String, ColumnStat] = Map.empty) {
+    colStats: Map[String, ColumnStat] = Map.empty,
+    histograms: Map[String, Histogram] = Map.empty) {
 
   /**
    * Convert [[CatalogStatistics]] to [[Statistics]], and match column stats to attributes based
@@ -360,8 +361,10 @@ case class CatalogStatistics(
    */
   def toPlanStats(planOutput: Seq[Attribute]): Statistics = {
     val matched = planOutput.flatMap(a => colStats.get(a.name).map(a -> _))
+    val matched2 = planOutput.flatMap(a => histograms.get(a.name).map(a -> _))
     Statistics(sizeInBytes = sizeInBytes, rowCount = rowCount,
-      attributeStats = AttributeMap(matched))
+      attributeStats = AttributeMap(matched),
+      histograms = AttributeMap(matched2))
   }
 
   /** Readable string representation for the CatalogStatistics. */

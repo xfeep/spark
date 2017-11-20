@@ -97,6 +97,7 @@ object EstimationUtils {
     dataType match {
       case _: NumericType | DateType | TimestampType => Decimal(value.toString)
       case BooleanType => if (value.asInstanceOf[Boolean]) Decimal(1) else Decimal(0)
+      case StringType => Decimal(StringToDouble(value.toString))
     }
   }
 
@@ -113,6 +114,17 @@ object EstimationUtils {
       case DoubleType => dec.toDouble
       case _: DecimalType => dec
     }
+  }
+
+  def StringToDouble(s: String): Double = {
+    val bytes = s.getBytes("utf-8")
+    var res = 0L
+    var flag = true
+    for(i <- bytes.indices if flag) {
+      res = res | ((bytes(i) & 0xff).toLong << (6 - i) * 8)
+      if (i == 6) flag = false
+    }
+    res.toDouble
   }
 
 }

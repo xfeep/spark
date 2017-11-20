@@ -19,11 +19,12 @@ package org.apache.spark.sql.catalyst.plans.logical.statsEstimation
 
 import scala.collection.immutable.HashSet
 import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.Literal.{FalseLiteral, TrueLiteral}
-import org.apache.spark.sql.catalyst.plans.logical.{ColumnStat, Filter, LeafNode, Statistics}
+import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.plans.logical.statsEstimation.EstimationUtils._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -33,6 +34,8 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
   private val childStats = plan.child.stats(catalystConf)
 
   private val colStatsMap = new ColumnStatsMap(childStats.attributeStats)
+
+  private val histogramMap = new HistogramMap(childStats.histograms)
 
   /**
    * Returns an option of Statistics for a Filter logical plan node.
@@ -55,13 +58,22 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       // The output is empty, we don't need to keep column stats.
       AttributeMap[ColumnStat](Nil)
     } else {
+      histogramMap.updateColumnStats(colStatsMap,
+        rowsBeforeFilter = childStats.rowCount.get,
+        rowsAfterFilter = filteredRowCount)
       colStatsMap.outputColumnStats(rowsBeforeFilter = childStats.rowCount.get,
         rowsAfterFilter = filteredRowCount)
+    }
+    val newHistogram = if (filteredRowCount == 0) {
+      // The output is empty, we don't need to keep column stats.
+      AttributeMap[Histogram](Nil)
+    } else {
+      histogramMap.outputHistogram()
     }
     val filteredSizeInBytes: BigInt = getOutputSize(plan.output, filteredRowCount, newColStats)
 
     Some(childStats.copy(sizeInBytes = filteredSizeInBytes, rowCount = Some(filteredRowCount),
-      attributeStats = newColStats))
+      attributeStats = newColStats, histograms = newHistogram))
   }
 
   /**
@@ -86,7 +98,8 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       case And(cond1, cond2) =>
         val percent1 = calculateFilterSelectivity(cond1, update).getOrElse(BigDecimal(1.0))
         val percent2 = calculateFilterSelectivity(cond2, update).getOrElse(BigDecimal(1.0))
-        Some(Math.pow((percent1 * percent2).toDouble, 0.5))
+        // Some(Math.pow((percent1 * percent2).toDouble, 0.5))
+        Some(percent1 * percent2)
 
       case Or(cond1, cond2) =>
         val percent1 = calculateFilterSelectivity(cond1, update = false).getOrElse(BigDecimal(1.0))
@@ -227,25 +240,47 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       isNull: Boolean,
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
-    val colStat = colStatsMap(attr)
-    val rowCountValue = childStats.rowCount.get
-    val nullPercent: BigDecimal = if (rowCountValue == 0) {
-      0
-    } else {
-      BigDecimal(colStat.nullCount) / BigDecimal(rowCountValue)
-    }
 
-    if (update) {
-      val newStats = if (isNull) {
-        colStat.copy(distinctCount = 0, min = None, max = None)
+    val rowCountValue = childStats.rowCount.get
+    var nullPercent: BigDecimal = 0
+    if (histogramMap.contains(attr)) {
+      val histogram = histogramMap(attr)
+      nullPercent = if (rowCountValue == 0) {
+        0
       } else {
-        colStat.copy(nullCount = 0)
+         1 - BigDecimal(histogram.totalNum) / BigDecimal(rowCountValue)
       }
-      colStatsMap.update(attr, newStats)
+
+      if (update) {
+        if (isNull) {
+          val newStats = ColumnStat(distinctCount = 0, min = None, max = None,
+            nullCount = 0, avgLen = 4, maxLen = 4)
+          colStatsMap.update(attr, newStats)
+        } else {
+          histogramMap.update(attr, histogram)
+        }
+
+      }
+    } else {
+      val colStat = colStatsMap(attr)
+      nullPercent = if (rowCountValue == 0) {
+        0
+      } else {
+        BigDecimal(colStat.nullCount) / BigDecimal(rowCountValue)
+      }
+
+      if (update) {
+        val newStats = if (isNull) {
+          colStat.copy(distinctCount = 0, min = None, max = None)
+        } else {
+          colStat.copy(nullCount = 0)
+        }
+        colStatsMap.update(attr, newStats)
+      }
     }
 
     val percent = if (isNull) {
@@ -273,7 +308,7 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       literal: Literal,
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
@@ -307,37 +342,55 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       literal: Literal,
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
-    val colStat = colStatsMap(attr)
-    val ndv = colStat.distinctCount
 
-    // decide if the value is in [min, max] of the column.
-    // We currently don't store min/max for binary/string type.
-    // Hence, we assume it is in boundary for binary/string type.
-    val statsRange = Range(colStat.min, colStat.max, attr.dataType)
-    if (statsRange.contains(literal)) {
-      if (update) {
-        // We update ColumnStat structure after apply this equality predicate:
-        // Set distinctCount to 1, nullCount to 0, and min/max values (if exist) to the literal
-        // value.
-        val newStats = attr.dataType match {
-          case StringType | BinaryType =>
-            colStat.copy(distinctCount = 1, nullCount = 0)
-          case _ =>
-            colStat.copy(distinctCount = 1, min = Some(literal.value),
-              max = Some(literal.value), nullCount = 0)
+    if(histogramMap.contains(attr)) {
+      val histogram: Histogram = histogramMap(attr)
+      val value = if (literal.dataType == StringType) {
+        EstimationUtils.StringToDouble(literal.value.toString)
+      } else literal.value.toString.toDouble
+      if (value >= histogram.min && value <= histogram.max) {
+        var res = 0.0
+        val (index, endpoint, distinctCount, height) = histogram.getInterval(
+          EstimationUtils.toDecimal(literal.value, literal.dataType).toDouble)
+        if(distinctCount != 0) {
+          res = (height / distinctCount) / histogram.totalNum
         }
-        colStatsMap.update(attr, newStats)
-      }
-
-      Some(1.0 / BigDecimal(ndv))
+        val newHistogram = Histogram(List(value), List(1),
+          List(height / distinctCount))
+        histogramMap.update(attr, newHistogram)
+        Some(res)
+      } else Some(0.0)
     } else {
-      Some(0.0)
-    }
+      val colStat = colStatsMap(attr)
+      val ndv = colStat.distinctCount
+      // decide if the value is in [min, max] of the column.
+      // We currently don't store min/max for binary/string type.
+      // Hence, we assume it is in boundary for binary/string type.
+      val statsRange = Range(colStat.min, colStat.max, attr.dataType)
+      if (statsRange.contains(literal)) {
+        if (update) {
+          // We update ColumnStat structure after apply this equality predicate:
+          // Set distinctCount to 1, nullCount to 0, and min/max values (if exist) to the literal
+          // value.
+          val newStats = attr.dataType match {
+            case StringType | BinaryType =>
+              colStat.copy(distinctCount = 1, nullCount = 0)
+            case _ =>
+              colStat.copy(distinctCount = 1, min = Some(literal.value),
+                max = Some(literal.value), nullCount = 0)
+          }
+          colStatsMap.update(attr, newStats)
+        }
 
+        Some(1.0 / BigDecimal(ndv))
+      } else {
+        Some(0.0)
+      }
+    }
   }
 
   /**
@@ -376,48 +429,83 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attr: Attribute,
       hSet: Set[Any],
       update: Boolean): Option[BigDecimal] = {
-    if (!colStatsMap.contains(attr)) {
+    if (!colStatsMap.contains(attr) && !histogramMap.contains(attr)) {
       logDebug("[CBO] No statistics for " + attr)
       return None
     }
 
-    val colStat = colStatsMap(attr)
-    val ndv = colStat.distinctCount
     val dataType = attr.dataType
+    var ndv = 1.0
     var newNdv = ndv
 
-    // use [min, max] to filter the original hSet
-    dataType match {
-      case _: NumericType | BooleanType | DateType | TimestampType =>
-        val statsRange = Range(colStat.min, colStat.max, dataType).asInstanceOf[NumericRange]
-        val validQuerySet = hSet.filter { v =>
-          v != null && statsRange.contains(Literal(v, dataType))
-        }
+    if (histogramMap.contains(attr)) {
+      val histogram: Histogram = histogramMap(attr)
+      ndv = histogram.totalNum
+      // use [min, max] to filter the original hSet
+      val validQuerySet = hSet.filter { v =>
+        v != null && EstimationUtils.toDecimal(v, dataType).toDouble >= histogram.min &&
+          EstimationUtils.toDecimal(v, dataType).toDouble <= histogram.max
+      }
 
-        if (validQuerySet.isEmpty) {
-          return Some(0.0)
-        }
+      if (validQuerySet.isEmpty) {
+        return Some(0.0)
+      }
 
-        val newMax = validQuerySet.maxBy(EstimationUtils.toDecimal(_, dataType))
-        val newMin = validQuerySet.minBy(EstimationUtils.toDecimal(_, dataType))
-        // newNdv should not be greater than the old ndv.  For example, column has only 2 values
-        // 1 and 6. The predicate column IN (1, 2, 3, 4, 5). validQuerySet.size is 5.
-        newNdv = ndv.min(BigInt(validQuerySet.size))
-        if (update) {
-          val newStats = colStat.copy(distinctCount = newNdv, min = Some(newMin),
-            max = Some(newMax), nullCount = 0)
-          colStatsMap.update(attr, newStats)
-        }
+      val querySet: List[Double] =
+        validQuerySet.map(EstimationUtils.toDecimal(_, dataType).toDouble).toList.sorted
+      val NewHeight: ListBuffer[Double] = ListBuffer[Double]()
 
-      // We assume the whole set since there is no min/max information for String/Binary type
-      case StringType | BinaryType =>
-        newNdv = ndv.min(BigInt(hSet.size))
-        if (update) {
-          val newStats = colStat.copy(distinctCount = newNdv, nullCount = 0)
-          colStatsMap.update(attr, newStats)
-        }
+      val newBuckets = querySet.filter(x => {
+        val (index, endPoint, distinct, height) = histogram.getInterval(x)
+        height != 0 && distinct != 0
+      }).map(x => {
+        val (index, endPoint, distinct, height) = histogram.getInterval(x)
+        val newHeight = height / distinct
+        NewHeight += newHeight
+        x
+      })
+      val NewDistincts = List.fill(newBuckets.size)(1L)
+      val newHistogram = Histogram(newBuckets, NewDistincts, NewHeight.toList)
+      newNdv = newHistogram.totalNum
+      if (update) {
+        histogramMap.update(attr, newHistogram)
+      }
+    } else {
+      val colStat = colStatsMap(attr)
+      ndv = colStat.distinctCount.toDouble
+      newNdv = ndv
+      // use [min, max] to filter the original hSet
+      dataType match {
+        case _: NumericType | BooleanType | DateType | TimestampType =>
+          val statsRange = Range(colStat.min, colStat.max, dataType).asInstanceOf[NumericRange]
+          val validQuerySet = hSet.filter { v =>
+            v != null && statsRange.contains(Literal(v, dataType))
+          }
+
+          if (validQuerySet.isEmpty) {
+            return Some(0.0)
+          }
+
+          val newMax = validQuerySet.maxBy(EstimationUtils.toDecimal(_, dataType))
+          val newMin = validQuerySet.minBy(EstimationUtils.toDecimal(_, dataType))
+          // newNdv should not be greater than the old ndv.  For example, column has only 2 values
+          // 1 and 6. The predicate column IN (1, 2, 3, 4, 5). validQuerySet.size is 5.
+          newNdv = ndv.min(validQuerySet.size)
+          if (update) {
+            val newStats = colStat.copy(distinctCount = newNdv.toLong, min = Some(newMin),
+              max = Some(newMax), nullCount = 0)
+            colStatsMap.update(attr, newStats)
+          }
+
+        // We assume the whole set since there is no min/max information for String/Binary type
+        case StringType | BinaryType =>
+          newNdv = ndv.min(hSet.size)
+          if (update) {
+            val newStats = colStat.copy(distinctCount = newNdv.toLong, nullCount = 0)
+            colStatsMap.update(attr, newStats)
+          }
+      }
     }
-
     // return the filter selectivity.  Without advanced statistics such as histograms,
     // we have to assume uniform distribution.
     Some((BigDecimal(newNdv) / BigDecimal(ndv)).min(1.0))
@@ -440,69 +528,287 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       literal: Literal,
       update: Boolean): Option[BigDecimal] = {
 
-    val colStat = colStatsMap(attr)
-    val statsRange = Range(colStat.min, colStat.max, attr.dataType).asInstanceOf[NumericRange]
-    val max = statsRange.max.toBigDecimal
-    val min = statsRange.min.toBigDecimal
-    val ndv = BigDecimal(colStat.distinctCount)
-
-    // determine the overlapping degree between predicate range and column's range
-    val numericLiteral = if (literal.dataType == BooleanType) {
-      if (literal.value.asInstanceOf[Boolean]) BigDecimal(1) else BigDecimal(0)
-    } else {
-      BigDecimal(literal.value.toString)
-    }
-    val (noOverlap: Boolean, completeOverlap: Boolean) = op match {
-      case _: LessThan =>
-        (numericLiteral <= min, numericLiteral > max)
-      case _: LessThanOrEqual =>
-        (numericLiteral < min, numericLiteral >= max)
-      case _: GreaterThan =>
-        (numericLiteral >= max, numericLiteral < min)
-      case _: GreaterThanOrEqual =>
-        (numericLiteral > max, numericLiteral <= min)
-    }
-
     var percent = BigDecimal(1.0)
-    if (noOverlap) {
-      percent = 0.0
-    } else if (completeOverlap) {
-      percent = 1.0
-    } else {
-      // This is the partial overlap case:
-      // Without advanced statistics like histogram, we assume uniform data distribution.
-      // We just prorate the adjusted range over the initial range to compute filter selectivity.
-      assert(max > min)
-      percent = op match {
-        case _: LessThan =>
-          if (numericLiteral == max) {
-            // If the literal value is right on the boundary, we can minus the part of the
-            // boundary value (1/ndv).
-            1.0 - 1.0 / ndv
-          } else {
-            (numericLiteral - min) / (max - min)
-          }
-        case _: LessThanOrEqual =>
-          if (numericLiteral == min) {
-            // The boundary value is the only satisfying value.
-            1.0 / ndv
-          } else {
-            (numericLiteral - min) / (max - min)
-          }
-        case _: GreaterThan =>
-          if (numericLiteral == min) {
-            1.0 - 1.0 / ndv
-          } else {
-            (max - numericLiteral) / (max - min)
-          }
-        case _: GreaterThanOrEqual =>
-          if (numericLiteral == max) {
-            1.0 / ndv
-          } else {
-            (max - numericLiteral) / (max - min)
-          }
+    if (histogramMap.contains(attr)) {
+      val histogram: Histogram = histogramMap(attr)
+      val statsRange = Range(Option(histogram.min),
+        Option(histogram.max), attr.dataType).asInstanceOf[NumericRange]
+      val max = statsRange.max.toBigDecimal
+      val min = statsRange.min.toBigDecimal
+      val numericLiteral = if (literal.dataType == BooleanType) {
+        if (literal.value.asInstanceOf[Boolean]) BigDecimal(1) else BigDecimal(0)
+      } else {
+        BigDecimal(literal.value.toString)
       }
+      val (noOverlap: Boolean, completeOverlap: Boolean) = op match {
+        case _: LessThan =>
+          (numericLiteral <= min, numericLiteral > max)
+        case _: LessThanOrEqual =>
+          (numericLiteral < min, numericLiteral >= max)
+        case _: GreaterThan =>
+          (numericLiteral >= max, numericLiteral < min)
+        case _: GreaterThanOrEqual =>
+          (numericLiteral > max, numericLiteral <= min)
+      }
+      if (noOverlap) {
+        percent = 0.0
+      } else if (completeOverlap) {
+        percent = 1.0
+        histogramMap.update(attr, histogram)
+      } else {
+        // We have advanced statistics
+        assert(max > min)
+        // must update the histogram
+        val (index, endPoint, distinctcount, height) =
+          histogram.getInterval(numericLiteral.toDouble)
+        var newBuckets: List[Double] = Nil
+        var newDistincts: List[Long] = Nil
+        var newHeight: List[Double] = Nil
+        val point = numericLiteral.toDouble
 
+        percent = op match {
+          case _: LessThan =>
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              if (point == max) {
+                distinctOnBucket = distinctcount - 1
+                if(distinctOnBucket > 0) {
+                  heightOnBucket = height - height / distinctcount
+                  sum = histogram.totalNum - height / distinctcount
+                } else {
+                  sum = histogram.totalNum
+                }
+              } else {
+                val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+                heightOnBucket = rateOnBucket * height
+                distinctOnBucket = ceil(rateOnBucket * distinctcount).toLong
+                for (i <- 0 until index) {
+                  sum += histogram.heights(i)
+                }
+                sum += heightOnBucket
+              }
+              // update
+              newBuckets = histogram.buckets
+                .dropRight(histogram.buckets.size - index - 1)
+              newDistincts = histogram.distinctCounts
+                .dropRight(histogram.distinctCounts.size - index)
+              newHeight = histogram.heights
+                .dropRight(histogram.distinctCounts.size - index)
+              newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
+              newDistincts = ((newDistincts.reverse.::(distinctOnBucket)).::(0L)).reverse
+              newHeight = ((newHeight.reverse.::(heightOnBucket)).::(0.0)).reverse
+            } else {
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
+              newBuckets = histogram.buckets.
+                dropRight(histogram.buckets.size - index)
+              newDistincts = histogram.distinctCounts.
+                dropRight(histogram.distinctCounts.size - index)
+              newHeight = histogram.heights.
+                dropRight(histogram.distinctCounts.size - index)
+            }
+            sum / histogram.totalNum
+
+          case _: LessThanOrEqual =>
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+              heightOnBucket = rateOnBucket * height
+              distinctOnBucket = ceil(rateOnBucket * distinctcount).toLong
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
+              sum += heightOnBucket
+              newBuckets = histogram.buckets
+                .dropRight(histogram.buckets.size - index - 1)
+              newDistincts = histogram.distinctCounts
+                .dropRight(histogram.distinctCounts.size - index)
+              newHeight = histogram.heights
+                .dropRight(histogram.distinctCounts.size - index)
+              newBuckets = newBuckets.reverse.::(numericLiteral.toDouble).reverse
+              newDistincts = ((newDistincts.reverse.::(distinctOnBucket)).::(0L)).reverse
+              newHeight = ((newHeight.reverse.::(heightOnBucket)).::(0.0)).reverse
+            } else {
+              for (i <- 0 to index) {
+                sum += histogram.heights(i)
+              }
+              if (histogram.buckets.contains(numericLiteral.toDouble)) {
+                newBuckets = histogram.buckets.
+                  dropRight(histogram.buckets.size - index - 1)
+                newDistincts = histogram.distinctCounts.
+                  dropRight(histogram.distinctCounts.size - index - 1)
+                newHeight = histogram.heights.
+                  dropRight(histogram.distinctCounts.size - index - 1)
+              } else {
+                newBuckets = histogram.buckets.
+                  dropRight(histogram.buckets.size - index)
+                newDistincts = histogram.distinctCounts.
+                  dropRight(histogram.distinctCounts.size - index)
+                newHeight = histogram.heights.dropRight(histogram.distinctCounts.size - index)
+              }
+            }
+
+            sum / histogram.totalNum
+          case _: GreaterThan =>
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+              heightOnBucket = (1 - rateOnBucket) * height
+              distinctOnBucket = ceil((1 - rateOnBucket) * distinctcount).toLong
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
+              sum += rateOnBucket * height
+
+              // if the point on the boundary
+              if (histogram.buckets.contains(numericLiteral.toDouble)
+                && numericLiteral.toDouble != histogram.buckets(0)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+                newBuckets = numericLiteral.toDouble :: newBuckets
+                newDistincts = distinctOnBucket :: newDistincts
+                newHeight = heightOnBucket :: newHeight
+              }
+            } else {
+              for (i <- 0 to index) {
+                sum += histogram.heights(i)
+              }
+              if (histogram.buckets.contains(numericLiteral.toDouble)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index)
+                newDistincts = histogram.distinctCounts.drop(index)
+                newHeight = histogram.heights.drop(index)
+              }
+            }
+            1.0 - (sum / histogram.totalNum)
+          case _: GreaterThanOrEqual =>
+            var sum = 0.0
+            var heightOnBucket = 0.0
+            var distinctOnBucket = 0L
+            if (histogram.heights.last == 0) {
+              if (endPoint == max) {
+                sum = histogram.totalNum
+              } else {
+                val rateOnBucket = (point - endPoint) / (histogram.buckets(index + 1) - endPoint)
+                heightOnBucket = (1 - rateOnBucket) * height
+                distinctOnBucket = ceil((1 - rateOnBucket) * distinctcount).toLong
+                for (i <- 0 until index) {
+                  sum += histogram.heights(i)
+                }
+                sum += rateOnBucket * height
+              }
+              // if the point on the boundary
+              if (histogram.buckets.contains(numericLiteral.toDouble)
+                && numericLiteral.toDouble != histogram.buckets(0)) {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+              } else {
+                newBuckets = histogram.buckets.drop(index + 1)
+                newDistincts = histogram.distinctCounts.drop(index + 1)
+                newHeight = histogram.heights.drop(index + 1)
+                newBuckets = numericLiteral.toDouble :: newBuckets
+                newDistincts = distinctOnBucket :: newDistincts
+                newHeight = heightOnBucket :: newHeight
+
+              }
+            } else {
+              for (i <- 0 until index) {
+                sum += histogram.heights(i)
+              }
+              newBuckets = histogram.buckets.drop(index)
+              newDistincts = histogram.distinctCounts.drop(index)
+              newHeight = histogram.heights.drop(index)
+            }
+            1.0 - (sum / histogram.totalNum)
+        }
+        // Construct new histogram
+        if (newBuckets.size != 0) {
+          val newHistogram = Histogram(newBuckets, newDistincts,
+            newHeight)
+          histogramMap.update(attr, newHistogram)
+        }
+      }
+    } else {
+      val colStat = colStatsMap(attr)
+      val statsRange = Range(colStat.min, colStat.max, attr.dataType).asInstanceOf[NumericRange]
+      val max = statsRange.max.toBigDecimal
+      val min = statsRange.min.toBigDecimal
+      val ndv = BigDecimal(colStat.distinctCount)
+
+      // determine the overlapping degree between predicate range and column's range
+      val numericLiteral = if (literal.dataType == BooleanType) {
+        if (literal.value.asInstanceOf[Boolean]) BigDecimal(1) else BigDecimal(0)
+      } else if (literal.dataType == StringType) {
+        BigDecimal(EstimationUtils.StringToDouble(literal.value.toString))
+      }
+      else {
+        BigDecimal(literal.value.toString)
+      }
+      val (noOverlap: Boolean, completeOverlap: Boolean) = op match {
+        case _: LessThan =>
+          (numericLiteral <= min, numericLiteral > max)
+        case _: LessThanOrEqual =>
+          (numericLiteral < min, numericLiteral >= max)
+        case _: GreaterThan =>
+          (numericLiteral >= max, numericLiteral < min)
+        case _: GreaterThanOrEqual =>
+          (numericLiteral > max, numericLiteral <= min)
+      }
+      if (noOverlap) {
+        percent = 0.0
+      } else if (completeOverlap) {
+        percent = 1.0
+      } else {
+        // This is the partial overlap case:
+        // Without advanced statistics like histogram, we assume uniform data distribution.
+        // We just prorate the adjusted range over the initial range to compute filter selectivity.
+        assert(max > min)
+        percent = op match {
+          case _: LessThan =>
+            if (numericLiteral == max) {
+              // If the literal value is right on the boundary, we can minus the part of the
+              // boundary value (1/ndv).
+              1.0 - 1.0 / ndv
+            } else {
+              (numericLiteral - min) / (max - min)
+            }
+          case _: LessThanOrEqual =>
+            if (numericLiteral == min) {
+              // The boundary value is the only satisfying value.
+              1.0 / ndv
+            } else {
+              (numericLiteral - min) / (max - min)
+            }
+          case _: GreaterThan =>
+            if (numericLiteral == min) {
+              1.0 - 1.0 / ndv
+            } else {
+              (max - numericLiteral) / (max - min)
+            }
+          case _: GreaterThanOrEqual =>
+            if (numericLiteral == max) {
+              1.0 / ndv
+            } else {
+              (max - numericLiteral) / (max - min)
+            }
+        }
+    }
       if (update) {
         val newValue = Some(literal.value)
         var newMax = colStat.max
@@ -520,7 +826,6 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
 
         val newStats =
           colStat.copy(distinctCount = newNdv, min = newMin, max = newMax, nullCount = 0)
-
         colStatsMap.update(attr, newStats)
       }
     }
@@ -548,11 +853,11 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
       attrRight: Attribute,
       update: Boolean): Option[BigDecimal] = {
 
-    if (!colStatsMap.contains(attrLeft)) {
+    if (!colStatsMap.contains(attrLeft) && !histogramMap.contains(attrLeft)) {
       logDebug("[CBO] No statistics for " + attrLeft)
       return None
     }
-    if (!colStatsMap.contains(attrRight)) {
+    if (!colStatsMap.contains(attrRight) && !histogramMap.contains(attrRight)) {
       logDebug("[CBO] No statistics for " + attrRight)
       return None
     }
@@ -565,14 +870,40 @@ case class FilterEstimation(plan: Filter, catalystConf: SQLConf) extends Logging
         return None
       case _ =>
     }
+    var colStatLeft : ColumnStat = null
+    if (histogramMap.contains(attrLeft)) {
+      var avglen = 4
+      attrLeft.dataType match {
+        case _: DecimalType | DoubleType | LongType => avglen = 8
+        case _: FloatType | IntegerType => avglen = 4
+        case _: BinaryType => avglen = 1
+        case _: DateType => avglen = 4
+        case _ => avglen = 4
+      }
+      colStatLeft = histogramMap(attrLeft).toColumnStats(avglen)
+    } else {
+      colStatLeft = colStatsMap(attrLeft)
+    }
 
-    val colStatLeft = colStatsMap(attrLeft)
     val statsRangeLeft = Range(colStatLeft.min, colStatLeft.max, attrLeft.dataType)
       .asInstanceOf[NumericRange]
     val maxLeft = statsRangeLeft.max
     val minLeft = statsRangeLeft.min
 
-    val colStatRight = colStatsMap(attrRight)
+    var colStatRight : ColumnStat = null
+    if (histogramMap.contains(attrRight)) {
+      var avglen = 4
+      attrRight.dataType match {
+        case _: DecimalType | DoubleType | LongType => avglen = 8
+        case _: FloatType | IntegerType => avglen = 4
+        case _: BinaryType => avglen = 1
+        case _: DateType => avglen = 4
+        case _ => avglen = 4
+      }
+      colStatRight = histogramMap(attrRight).toColumnStats(avglen)
+    } else {
+      colStatRight = colStatsMap(attrRight)
+    }
     val statsRangeRight = Range(colStatRight.min, colStatRight.max, attrRight.dataType)
       .asInstanceOf[NumericRange]
     val maxRight = statsRangeRight.max
@@ -782,7 +1113,13 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
    */
   def outputColumnStats(rowsBeforeFilter: BigInt, rowsAfterFilter: BigInt)
     : AttributeMap[ColumnStat] = {
-    val newColumnStats = originalMap.map { case (attr, oriColStat) =>
+    val ColumnStatUpdateByHistogramOrHimself =
+      updatedMap.map( x => {
+        x._2._1 -> x._2._2
+      })
+    val newColumnStats = originalMap.filter(x => {
+      !ColumnStatUpdateByHistogramOrHimself.contains(x._1)
+    }).map { case (attr, oriColStat) =>
       // Update ndv based on the overall filter selectivity: scale down ndv if the number of rows
       // decreases; otherwise keep it unchanged.
       val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
@@ -790,6 +1127,61 @@ case class ColumnStatsMap(originalMap: AttributeMap[ColumnStat]) {
       val colStat = updatedMap.get(attr.exprId).map(_._2).getOrElse(oriColStat)
       attr -> colStat.copy(distinctCount = newNdv)
     }
-    AttributeMap(newColumnStats.toSeq)
+    AttributeMap((newColumnStats ++ ColumnStatUpdateByHistogramOrHimself).toSeq)
   }
+}
+
+case class HistogramMap(originalMap: AttributeMap[Histogram]) {
+  def outputHistogram() : AttributeMap[Histogram] = {
+    val newHistogram = updatedMap.map((x => {
+      x._2._1 -> x._2._2
+    })).toMap
+    AttributeMap(newHistogram.toSeq)
+  }
+
+
+
+  def updateColumnStats(cm: ColumnStatsMap,
+                        rowsBeforeFilter: BigInt,
+                        rowsAfterFilter: BigInt) : Unit = {
+    originalMap.foreach { case (attr, oriHist) =>
+      val avglen = attr.dataType match {
+        case _: DecimalType => 16
+        case _: DoubleType | LongType => 8
+        case _: FloatType | IntegerType => 4
+        case _: BinaryType => 1
+        case _: DateType => 4
+        case _: StringType => 17
+        case _ => 4
+      }
+      if (updatedMap.contains(attr.exprId)) {
+        cm.update(attr, updatedMap.get(attr.exprId).get._2.toColumnStats(avglen))
+      } else {
+        if (!cm.contains(attr)) {
+          val stat = oriHist.toColumnStats(avglen)
+          val newNdv = EstimationUtils.updateNdv(oldNumRows = rowsBeforeFilter,
+            newNumRows = rowsAfterFilter, oldNdv = stat.distinctCount)
+          cm.update(attr, stat.copy(distinctCount = newNdv))
+        }
+      }
+    }
+  }
+
+
+  /** This map maintains the latest histogram stats. */
+  private val updatedMap: mutable.Map[ExprId, (Attribute, Histogram)] = mutable.HashMap.empty
+
+  def contains(a: Attribute): Boolean = updatedMap.contains(a.exprId) || originalMap.contains(a)
+
+  def apply(a: Attribute): Histogram = {
+    if (updatedMap.contains(a.exprId)) {
+      updatedMap(a.exprId)._2
+    } else {
+      originalMap(a)
+    }
+  }
+
+  /** Updates histogram in updatedMap. */
+  def update(a: Attribute, stats: Histogram): Unit = updatedMap.update(a.exprId, a -> stats)
+
 }
